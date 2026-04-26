@@ -18,7 +18,13 @@ class WaypointPathGenerator:
             ]
         )
 
+
+
+
+
 from scipy.spatial.transform import Rotation as R
+from lsy_drone_racing.control.controllers.modules.occupancy_grid_3d import OccupancyGrid3D
+from lsy_drone_racing.control.controllers.modules.astar_3d import astar_3d
 
 
 class GatePassingPathGenerator:
@@ -34,7 +40,7 @@ class GatePassingPathGenerator:
 
     def __init__(
         self,
-        gate_entry_distance: float = 0.18,
+        gate_entry_distance: float = 0.2,
         obstacle_detection_radius: float = 0.35,
         obstacle_clearance_radius: float = 0.28,
         max_nudge: float = 0.20,
@@ -148,3 +154,152 @@ class GatePassingPathGenerator:
         if norm < 1e-9:
             return v
         return v / norm
+
+class AStarGatePathGenerator:
+    """
+    GatePassingPathGenerator gives mandatory gate points.
+    A* connects only the free-space segments:
+        current -> next gate entry
+
+    Gate traversal itself remains direct:
+        entry -> center -> exit
+    """
+
+    def __init__(
+        self,
+        gate_passing_generator=None,
+        grid_resolution: float = 0.075,
+        safety_margin: float = 0.04,
+        obstacle_radius: float = 0.20,
+        prune_path: bool = True,
+        final_extension_distance: float = 0.60,
+    ):
+        self.gate_passing_generator = (
+            GatePassingPathGenerator(max_nudge=0.0)
+            if gate_passing_generator is None
+            else gate_passing_generator
+        )
+        self.grid_resolution = grid_resolution
+        self.safety_margin = safety_margin
+        self.obstacle_radius = obstacle_radius
+        self.prune_path = prune_path
+        self.final_extension_distance = final_extension_distance
+
+    def generate(self, obs, config=None):
+        mandatory = self.gate_passing_generator.generate(obs, config)
+
+        grid = OccupancyGrid3D(
+            obs=obs,
+            config=config,
+            resolution=self.grid_resolution,
+            safety_margin=self.safety_margin,
+            obstacle_radius=self.obstacle_radius,
+        )
+
+        final_path = [mandatory[0]]
+
+        num_gates = (len(mandatory) - 1) // 3
+        current = mandatory[0]
+
+        for gate_i in range(num_gates):
+            base = 1 + 3 * gate_i
+
+            entry = mandatory[base + 0]
+            center = mandatory[base + 1]
+            exit_ = mandatory[base + 2]
+
+            astar_segment = self.plan_astar(grid, current, entry)
+
+            if len(astar_segment) > 1:
+                final_path.extend(astar_segment[1:])
+
+            # Keep gate crossing direct and ordered.
+            final_path.append(center)
+            final_path.append(exit_)
+
+            current = exit_
+
+        # Final extension after last gate.
+        gates_pos = np.asarray(obs["gates_pos"], dtype=float)
+        gates_quat = np.asarray(obs["gates_quat"], dtype=float)
+
+        if len(gates_pos) > 0 and self.final_extension_distance > 0.0:
+            last_gate_pos = gates_pos[-1]
+            last_gate_quat = gates_quat[-1]
+
+            rot = R.from_quat(last_gate_quat)
+            forward = rot.apply(np.array([1.0, 0.0, 0.0]))
+            forward = forward / max(np.linalg.norm(forward), 1e-9)
+
+            finish = last_gate_pos + self.final_extension_distance * forward
+            finish = self.gate_passing_generator._clip_z(finish)
+
+            astar_segment = self.plan_astar(grid, current, finish)
+
+            if len(astar_segment) > 1:
+                final_path.extend(astar_segment[1:])
+
+            current = finish
+
+        path = np.asarray(final_path, dtype=float)
+
+        if self.prune_path:
+            path = self._prune_path(path, grid)
+
+        return path
+
+    def plan_astar(self, grid, start, goal):
+        start_idx = grid.world_to_grid(start)
+        goal_idx = grid.world_to_grid(goal)
+
+        idx_path = astar_3d(grid, start_idx, goal_idx)
+
+        if idx_path is None:
+            print(
+                "WARNING: A* failed; falling back to straight segment:",
+                "start=", start,
+                "goal=", goal,
+            )
+            return np.vstack([start, goal])
+
+        return np.asarray([grid.grid_to_world(idx) for idx in idx_path], dtype=float)
+
+    def _prune_path(self, path, grid):
+        if len(path) <= 2:
+            return path
+
+        pruned = [path[0]]
+        i = 0
+
+        while i < len(path) - 1:
+            j = len(path) - 1
+
+            while j > i + 1:
+                if self._line_is_free(path[i], path[j], grid):
+                    break
+                j -= 1
+
+            pruned.append(path[j])
+            i = j
+
+        return np.asarray(pruned, dtype=float)
+
+    def _line_is_free(self, a, b, grid, step=None):
+        if step is None:
+            step = grid.resolution * 0.5
+
+        a = np.asarray(a, dtype=float)
+        b = np.asarray(b, dtype=float)
+
+        dist = np.linalg.norm(b - a)
+        if dist < 1e-9:
+            return grid.is_free(grid.world_to_grid(a))
+
+        n = max(2, int(np.ceil(dist / step)))
+
+        for alpha in np.linspace(0.0, 1.0, n):
+            p = (1.0 - alpha) * a + alpha * b
+            if not grid.is_free(grid.world_to_grid(p)):
+                return False
+
+        return True

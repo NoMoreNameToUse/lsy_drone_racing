@@ -23,7 +23,7 @@ from scipy.spatial.transform import Rotation as R
 from lsy_drone_racing.control import Controller
 
 ## Modular imports
-from lsy_drone_racing.control.controllers.modules.path_generator import WaypointPathGenerator, GatePassingPathGenerator
+from lsy_drone_racing.control.controllers.modules.path_generator import WaypointPathGenerator, GatePassingPathGenerator, AStarGatePathGenerator
 from lsy_drone_racing.control.controllers.modules.timing_module import UniformTiming, DistanceTiming
 from lsy_drone_racing.control.controllers.modules.trajectory_module import SplineTrajectory
 
@@ -190,7 +190,14 @@ class AttitudeMPC(Controller):
         super().__init__(obs, info, config)
 
         # modules
-        self.path_gen = GatePassingPathGenerator()
+        # self.path_gen = AStarGatePathGenerator()
+        # self.path_gen = WaypointPathGenerator()
+        self.path_gen = AStarGatePathGenerator(
+            grid_resolution=0.05,
+            safety_margin=0.04,
+            obstacle_radius=0.18,
+            prune_path=False,
+            )
         ##self.timing = UniformTiming()
 
         self.timing = DistanceTiming(
@@ -229,6 +236,7 @@ class AttitudeMPC(Controller):
             np.asarray(obs["obstacles_pos"], dtype=float),
             min_clearance=0.25,
         )
+        self._executed_pos = []
 
         ## End debug outputs 
         self._N = 25
@@ -335,6 +343,18 @@ class AttitudeMPC(Controller):
     ) -> bool:
         """Increment the tick counter."""
         self._tick += 1
+
+        # Debug
+        self._executed_pos.append(np.asarray(obs["pos"], dtype=float).copy())
+        if terminated or truncated or self._finished:
+            np.savez(
+                "debug_outputs/level1_execution_debug.npz",
+                gates_pos=self._track_gates,
+                obstacles_pos=self._track_obstacles,
+                raw_waypoints=self._raw_waypoints,
+                traj_pos=self.trajectory._pos,
+                executed_pos=np.asarray(self._executed_pos),
+            )
 
         return self._finished
 
