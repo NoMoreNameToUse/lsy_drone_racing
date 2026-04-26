@@ -62,8 +62,15 @@ class GatePassingPathGenerator:
         )
 
     def generate(self, obs, config=None):
-        gates_pos = np.asarray(obs["gates_pos"], dtype=float)
-        gates_quat = np.asarray(obs["gates_quat"], dtype=float)
+        target_gate = int(np.asarray(obs.get("target_gate", 0)).item())
+
+        gates_pos_all = np.asarray(obs["gates_pos"], dtype=float)
+        gates_quat_all = np.asarray(obs["gates_quat"], dtype=float)
+
+        # Only remaining gates are mandatory targets.
+        gates_pos = gates_pos_all[target_gate:]
+        gates_quat = gates_quat_all[target_gate:]
+
         obstacles_pos = np.asarray(obs["obstacles_pos"], dtype=float)
         start_pos = np.asarray(obs["pos"], dtype=float)
 
@@ -171,7 +178,7 @@ class AStarGatePathGenerator:
         grid_resolution: float = 0.075,
         safety_margin: float = 0.04,
         obstacle_radius: float = 0.20,
-        prune_path: bool = True,
+        prune_path: bool = False,
         final_extension_distance: float = 0.60,
     ):
         self.gate_passing_generator = (
@@ -219,13 +226,18 @@ class AStarGatePathGenerator:
 
             current = exit_
 
-        # Final extension after last gate.
-        gates_pos = np.asarray(obs["gates_pos"], dtype=float)
-        gates_quat = np.asarray(obs["gates_quat"], dtype=float)
+        # Final extension after the last remaining gate.
+        target_gate = int(np.asarray(obs.get("target_gate", 0)).item())
 
-        if len(gates_pos) > 0 and self.final_extension_distance > 0.0:
-            last_gate_pos = gates_pos[-1]
-            last_gate_quat = gates_quat[-1]
+        gates_pos_all = np.asarray(obs["gates_pos"], dtype=float)
+        gates_quat_all = np.asarray(obs["gates_quat"], dtype=float)
+
+        remaining_gates_pos = gates_pos_all[target_gate:]
+        remaining_gates_quat = gates_quat_all[target_gate:]
+
+        if len(remaining_gates_pos) > 0 and self.final_extension_distance > 0.0:
+            last_gate_pos = remaining_gates_pos[-1]
+            last_gate_quat = remaining_gates_quat[-1]
 
             rot = R.from_quat(last_gate_quat)
             forward = rot.apply(np.array([1.0, 0.0, 0.0]))

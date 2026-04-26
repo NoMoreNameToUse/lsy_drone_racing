@@ -52,7 +52,7 @@ def astar_3d(grid, start_idx, goal_idx, max_iterations=200_000):
         if current == goal_idx:
             return reconstruct_path(came_from, current)
 
-        for neighbor, step_cost in neighbors_26(current):
+        for neighbor, step_cost in neighbors_18(current):
             if neighbor in visited:
                 continue
 
@@ -72,7 +72,7 @@ def astar_3d(grid, start_idx, goal_idx, max_iterations=200_000):
     return None
 
 
-def neighbors_26(idx):
+def neighbors_18(idx):
     ix, iy, iz = idx
 
     for dx in (-1, 0, 1):
@@ -81,9 +81,14 @@ def neighbors_26(idx):
                 if dx == 0 and dy == 0 and dz == 0:
                     continue
 
-                neighbor = (ix + dx, iy + dy, iz + dz)
-                cost = math.sqrt(dx * dx + dy * dy + dz * dz)
-                yield neighbor, cost
+                nonzero = int(dx != 0) + int(dy != 0) + int(dz != 0)
+
+                # 18-connected: axis + edge diagonals, no corner diagonals
+                if nonzero > 2:
+                    continue
+
+                cost = np.sqrt(dx * dx + dy * dy + dz * dz)
+                yield (ix + dx, iy + dy, iz + dz), cost
 
 
 def heuristic(a, b):

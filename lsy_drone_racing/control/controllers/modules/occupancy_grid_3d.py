@@ -19,7 +19,7 @@ class OccupancyGrid3D:
         config=None,
         resolution: float = 0.075,
         safety_margin: float = 0.05,
-        obstacle_radius: float = 0.25,
+        obstacle_radius: float = 0.23,
         gate_inner_width: float = 0.40,
         gate_outer_width: float = 0.72,
         gate_thickness: float = 0.08,

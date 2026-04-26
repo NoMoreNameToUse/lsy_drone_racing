@@ -29,6 +29,8 @@ from lsy_drone_racing.control.controllers.modules.trajectory_module import Splin
 
 ## Debug stuff
 from pathlib import Path
+import time
+
 
 if TYPE_CHECKING:
     from crazyflow import Sim
@@ -215,6 +217,15 @@ class AttitudeMPC(Controller):
         self._track_gates = np.asarray(obs.get("gates_pos", []), dtype=float)
         self._track_obstacles = np.asarray(obs.get("obstacles_pos", []), dtype=float)
 
+        self._last_target_gate = int(np.asarray(obs["target_gate"]).item())
+        self._last_gates_pos = np.asarray(obs["gates_pos"], dtype=float).copy()
+        self._last_gates_quat = np.asarray(obs["gates_quat"], dtype=float).copy()
+        self._last_obstacles_pos = np.asarray(obs["obstacles_pos"], dtype=float).copy()
+
+        self._replan_count = 0
+        self._min_replan_interval_ticks = int(0.5 * config.env.freq)  # at most every 0.5s
+        self._last_replan_tick = 0
+
         ## Debug outputs
         debug_dir = Path("debug_outputs")
         debug_dir.mkdir(exist_ok=True)
@@ -254,6 +265,7 @@ class AttitudeMPC(Controller):
 
         self._tick = 0
         self._tick_max = len(self.trajectory._pos) - 1 - self._N
+        self._global_tick = 0
         self._config = config
         self._finished = False
 
@@ -284,6 +296,12 @@ class AttitudeMPC(Controller):
             The orientation as roll, pitch, yaw angles, and the collective thrust
             [r_des, p_des, y_des, t_des] as a numpy array.
         """
+
+        self._global_tick += 1
+
+        if self._should_replan(obs):
+            self._replan_trajectory(obs)
+
         if self._tick >= self._tick_max:
             self._finished = True
 
@@ -332,6 +350,79 @@ class AttitudeMPC(Controller):
 
         return u0
 
+    def _replan_trajectory(self, obs):
+        """Regenerate path and trajectory from the current observation."""
+        t0 = time.perf_counter()
+        waypoints = self.path_gen.generate(obs, self._config)
+        t1 = time.perf_counter()
+
+        self._raw_waypoints = np.asarray(waypoints, dtype=float)
+
+        t = self.timing.compute(self._raw_waypoints)
+        self.trajectory = SplineTrajectory(self._raw_waypoints, t, self._config.env.freq)
+
+        t2 = time.perf_counter()
+        print(
+            f"Replan #{self._replan_count}: "
+            f"path={1000*(t1-t0):.1f} ms, "
+            f"traj={1000*(t2-t1):.1f} ms, "
+            f"waypoints={len(self._raw_waypoints)}"
+        )
+        self._tick = 0
+        self._tick_max = len(self.trajectory._pos) - 1 - self._N
+        self._finished = False
+
+        self._track_gates = np.asarray(obs.get("gates_pos", []), dtype=float)
+        self._track_obstacles = np.asarray(obs.get("obstacles_pos", []), dtype=float)
+
+        self._last_target_gate = int(np.asarray(obs["target_gate"]).item())
+        self._last_gates_pos = np.asarray(obs["gates_pos"], dtype=float).copy()
+        self._last_gates_quat = np.asarray(obs["gates_quat"], dtype=float).copy()
+        self._last_obstacles_pos = np.asarray(obs["obstacles_pos"], dtype=float).copy()
+
+        self._last_replan_tick = self._global_tick
+        self._replan_count += 1
+
+        print(f"Replanned trajectory #{self._replan_count}")
+        print("target_gate:", self._last_target_gate)
+        print("waypoint count:", len(self._raw_waypoints))
+
+    def _should_replan(self, obs):
+        """Event-triggered replanning for level 2."""
+        current_target_gate = int(np.asarray(obs["target_gate"]).item())
+
+        # Avoid replanning every tick.
+        if self._global_tick - self._last_replan_tick < self._min_replan_interval_ticks:
+            return False
+
+        # Replan when a gate has been passed.
+        if current_target_gate != self._last_target_gate:
+            print("Replan trigger: target gate changed")
+            return True
+
+        gates_pos = np.asarray(obs["gates_pos"], dtype=float)
+        gates_quat = np.asarray(obs["gates_quat"], dtype=float)
+        obstacles_pos = np.asarray(obs["obstacles_pos"], dtype=float)
+
+        gate_pos_shift = np.linalg.norm(gates_pos - self._last_gates_pos, axis=1)
+        obstacle_shift = np.linalg.norm(obstacles_pos - self._last_obstacles_pos, axis=1)
+
+        # Thresholds should be larger than tiny sensor/noise changes.
+        if np.any(gate_pos_shift > 0.05):
+            print("Replan trigger: gate position changed", gate_pos_shift)
+            return True
+
+        if np.any(obstacle_shift > 0.05):
+            print("Replan trigger: obstacle position changed", obstacle_shift)
+            return True
+
+        # Quaternion change check, rough but good enough.
+        quat_diff = np.linalg.norm(gates_quat - self._last_gates_quat, axis=1)
+        if np.any(quat_diff > 0.05):
+            print("Replan trigger: gate orientation changed", quat_diff)
+            return True
+
+        return False
     def step_callback(
         self,
         action: NDArray[np.floating],
