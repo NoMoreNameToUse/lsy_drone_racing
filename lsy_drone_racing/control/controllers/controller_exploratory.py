@@ -196,15 +196,15 @@ class AttitudeMPC(Controller):
         # self.path_gen = WaypointPathGenerator()
         self.path_gen = AStarGatePathGenerator(
             grid_resolution=0.05,
-            safety_margin=0.04,
-            obstacle_radius=0.18,
+            safety_margin=0.05,
+            obstacle_radius=0.2,
             prune_path=True,
             )
         ##self.timing = UniformTiming()
 
         self.timing = DistanceTiming(
-            nominal_speed=2,
-            min_segment_time=0.1,
+            nominal_speed=1,
+            min_segment_time=0.2,
         )
 
         # generate once
