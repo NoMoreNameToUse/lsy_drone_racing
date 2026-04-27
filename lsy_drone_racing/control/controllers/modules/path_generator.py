@@ -170,6 +170,10 @@ class AStarGatePathGenerator:
 
     Gate traversal itself remains direct:
         entry -> center -> exit
+
+    Optional pruning is conservative and gate-aware:
+        it is applied only within each A* free-space segment,
+        never across mandatory gate anchors.
     """
 
     def __init__(
@@ -178,6 +182,9 @@ class AStarGatePathGenerator:
         grid_resolution: float = 0.075,
         safety_margin: float = 0.04,
         obstacle_radius: float = 0.20,
+        heuristic_weight: float = 1.15,
+        max_astar_iterations: int = 200_000,
+        endpoint_snap_distance: float = 0.30,
         prune_path: bool = False,
         final_extension_distance: float = 0.60,
     ):
@@ -189,6 +196,9 @@ class AStarGatePathGenerator:
         self.grid_resolution = grid_resolution
         self.safety_margin = safety_margin
         self.obstacle_radius = obstacle_radius
+        self.heuristic_weight = heuristic_weight
+        self.max_astar_iterations = max_astar_iterations
+        self.endpoint_snap_distance = endpoint_snap_distance
         self.prune_path = prune_path
         self.final_extension_distance = final_extension_distance
 
@@ -216,6 +226,7 @@ class AStarGatePathGenerator:
             exit_ = mandatory[base + 2]
 
             astar_segment = self.plan_astar(grid, current, entry)
+            astar_segment = self._maybe_prune_segment(astar_segment, grid)
 
             if len(astar_segment) > 1:
                 final_path.extend(astar_segment[1:])
@@ -247,24 +258,57 @@ class AStarGatePathGenerator:
             finish = self.gate_passing_generator._clip_z(finish)
 
             astar_segment = self.plan_astar(grid, current, finish)
+            astar_segment = self._maybe_prune_segment(astar_segment, grid)
 
             if len(astar_segment) > 1:
                 final_path.extend(astar_segment[1:])
 
             current = finish
 
-        path = np.asarray(final_path, dtype=float)
-
-        if self.prune_path:
-            path = self._prune_path(path, grid)
-
-        return path
+        return np.asarray(final_path, dtype=float)
 
     def plan_astar(self, grid, start, goal):
         start_idx = grid.world_to_grid(start)
         goal_idx = grid.world_to_grid(goal)
 
-        idx_path = astar_3d(grid, start_idx, goal_idx)
+        snapped_start_idx = grid.nearest_free_idx(start_idx, max_distance=self.endpoint_snap_distance)
+        snapped_goal_idx = grid.nearest_free_idx(goal_idx, max_distance=self.endpoint_snap_distance)
+
+        if snapped_start_idx is None:
+            print(f"A*: no free start cell near {start_idx}, world={start}")
+            return np.vstack([start, goal])
+
+        if snapped_goal_idx is None:
+            print(f"A*: no free goal cell near {goal_idx}, world={goal}")
+            return np.vstack([start, goal])
+
+        if snapped_start_idx != start_idx:
+            print(
+                "A*: snapped start",
+                start_idx,
+                "->",
+                snapped_start_idx,
+                "world=",
+                grid.grid_to_world(snapped_start_idx),
+            )
+
+        if snapped_goal_idx != goal_idx:
+            print(
+                "A*: snapped goal",
+                goal_idx,
+                "->",
+                snapped_goal_idx,
+                "world=",
+                grid.grid_to_world(snapped_goal_idx),
+            )
+
+        idx_path = astar_3d(
+            grid,
+            snapped_start_idx,
+            snapped_goal_idx,
+            max_iterations=self.max_astar_iterations,
+            heuristic_weight=self.heuristic_weight,
+        )
 
         if idx_path is None:
             print(
@@ -275,6 +319,12 @@ class AStarGatePathGenerator:
             return np.vstack([start, goal])
 
         return np.asarray([grid.grid_to_world(idx) for idx in idx_path], dtype=float)
+
+    def _maybe_prune_segment(self, path, grid):
+        if not self.prune_path:
+            return path
+
+        return self._prune_path(path, grid)
 
     def _prune_path(self, path, grid):
         if len(path) <= 2:

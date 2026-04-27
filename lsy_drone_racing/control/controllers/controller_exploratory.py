@@ -198,13 +198,13 @@ class AttitudeMPC(Controller):
             grid_resolution=0.05,
             safety_margin=0.04,
             obstacle_radius=0.18,
-            prune_path=False,
+            prune_path=True,
             )
         ##self.timing = UniformTiming()
 
         self.timing = DistanceTiming(
-            nominal_speed=0.6,
-            min_segment_time=0.15,
+            nominal_speed=2,
+            min_segment_time=0.1,
         )
 
         # generate once
@@ -307,11 +307,6 @@ class AttitudeMPC(Controller):
 
         traj = self.trajectory.sample_horizon(self._tick, self._N)
 
-        if self._tick == 0:
-            print("First current pos:", obs["pos"])
-            print("First traj pos:", traj["pos"][0])
-            print("First traj terminal:", traj["pos_terminal"])
-
         assert traj["pos"].shape == (self._N, 3), traj["pos"].shape
         assert traj["vel"].shape == (self._N, 3), traj["vel"].shape
         assert traj["yaw"].shape == (self._N,), traj["yaw"].shape
@@ -383,9 +378,7 @@ class AttitudeMPC(Controller):
         self._last_replan_tick = self._global_tick
         self._replan_count += 1
 
-        print(f"Replanned trajectory #{self._replan_count}")
-        print("target_gate:", self._last_target_gate)
-        print("waypoint count:", len(self._raw_waypoints))
+        print(f"Replanned trajectory #{self._replan_count}. target_gate: ", {self._last_target_gate})
 
     def _should_replan(self, obs):
         """Event-triggered replanning for level 2."""

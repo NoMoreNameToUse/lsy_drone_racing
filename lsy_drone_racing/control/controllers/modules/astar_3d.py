@@ -3,7 +3,16 @@ import math
 import numpy as np
 
 
-def astar_3d(grid, start_idx, goal_idx, max_iterations=200_000):
+NEIGHBOR_STEPS_18 = tuple(
+    (dx, dy, dz, math.sqrt(dx * dx + dy * dy + dz * dz))
+    for dx in (-1, 0, 1)
+    for dy in (-1, 0, 1)
+    for dz in (-1, 0, 1)
+    if (dx, dy, dz) != (0, 0, 0) and (int(dx != 0) + int(dy != 0) + int(dz != 0) <= 2)
+)
+
+
+def astar_3d(grid, start_idx, goal_idx, max_iterations=200_000, heuristic_weight=1.0):
     """
     Basic 26-connected 3D A*.
 
@@ -26,12 +35,20 @@ def astar_3d(grid, start_idx, goal_idx, max_iterations=200_000):
         print(f"A*: goal occupied {goal_idx}, world={grid.grid_to_world(goal_idx)}")
         return None
 
-    open_heap = []
-    heapq.heappush(open_heap, (0.0, start_idx))
+    shape = tuple(grid.shape.tolist())
+    occupied = grid.occupied
 
-    came_from = {}
-    g_score = {start_idx: 0.0}
-    visited = set()
+    g_score = np.full(shape, np.inf, dtype=float)
+    closed = np.zeros(shape, dtype=bool)
+    parents = np.full(shape + (3,), -1, dtype=np.int32)
+
+    sx, sy, sz = start_idx
+    gx, gy, gz = goal_idx
+
+    g_score[sx, sy, sz] = 0.0
+
+    start_h = heuristic(start_idx, goal_idx)
+    open_heap = [(heuristic_weight * start_h, start_h, sx, sy, sz)]
 
     iterations = 0
 
@@ -42,66 +59,66 @@ def astar_3d(grid, start_idx, goal_idx, max_iterations=200_000):
             print("A*: exceeded max iterations")
             return None
 
-        _, current = heapq.heappop(open_heap)
+        _, _, cx, cy, cz = heapq.heappop(open_heap)
 
-        if current in visited:
+        if closed[cx, cy, cz]:
             continue
 
-        visited.add(current)
+        closed[cx, cy, cz] = True
 
-        if current == goal_idx:
-            return reconstruct_path(came_from, current)
+        if (cx, cy, cz) == goal_idx:
+            return reconstruct_path(parents, start_idx, goal_idx)
 
-        for neighbor, step_cost in neighbors_18(current):
-            if neighbor in visited:
+        current_g = g_score[cx, cy, cz]
+
+        for dx, dy, dz, step_cost in NEIGHBOR_STEPS_18:
+            nx = cx + dx
+            ny = cy + dy
+            nz = cz + dz
+
+            if nx < 0 or ny < 0 or nz < 0:
                 continue
 
-            if not grid.is_free(neighbor):
+            if nx >= shape[0] or ny >= shape[1] or nz >= shape[2]:
                 continue
 
-            tentative_g = g_score[current] + step_cost
+            if closed[nx, ny, nz] or occupied[nx, ny, nz]:
+                continue
 
-            if tentative_g < g_score.get(neighbor, math.inf):
-                came_from[neighbor] = current
-                g_score[neighbor] = tentative_g
+            tentative_g = current_g + step_cost
 
-                f_score = tentative_g + heuristic(neighbor, goal_idx)
-                heapq.heappush(open_heap, (f_score, neighbor))
+            if tentative_g >= g_score[nx, ny, nz]:
+                continue
+
+            g_score[nx, ny, nz] = tentative_g
+            parents[nx, ny, nz] = (cx, cy, cz)
+
+            h_score = heuristic((nx, ny, nz), goal_idx)
+            f_score = tentative_g + heuristic_weight * h_score
+            heapq.heappush(open_heap, (f_score, h_score, nx, ny, nz))
 
     print("A*: failed to find path")
     return None
 
 
-def neighbors_18(idx):
-    ix, iy, iz = idx
-
-    for dx in (-1, 0, 1):
-        for dy in (-1, 0, 1):
-            for dz in (-1, 0, 1):
-                if dx == 0 and dy == 0 and dz == 0:
-                    continue
-
-                nonzero = int(dx != 0) + int(dy != 0) + int(dz != 0)
-
-                # 18-connected: axis + edge diagonals, no corner diagonals
-                if nonzero > 2:
-                    continue
-
-                cost = np.sqrt(dx * dx + dy * dy + dz * dz)
-                yield (ix + dx, iy + dy, iz + dz), cost
-
-
 def heuristic(a, b):
-    a = np.asarray(a, dtype=float)
-    b = np.asarray(b, dtype=float)
-    return float(np.linalg.norm(a - b))
+    dx = a[0] - b[0]
+    dy = a[1] - b[1]
+    dz = a[2] - b[2]
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
 
 
-def reconstruct_path(came_from, current):
+def reconstruct_path(parents, start_idx, goal_idx):
+    current = goal_idx
     path = [current]
 
-    while current in came_from:
-        current = came_from[current]
+    while current != start_idx:
+        px, py, pz = parents[current]
+
+        if px < 0:
+            return None
+
+        current = (int(px), int(py), int(pz))
         path.append(current)
 
     path.reverse()
