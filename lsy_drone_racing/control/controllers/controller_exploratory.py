@@ -1,10 +1,24 @@
 """This module implements an example MPC using attitude control for a quadrotor.
 
-It utilizes the collective thrust interface for drone control to compute control commands based on
-current state observations and desired waypoints.
+The Cavemen Approach for a exploratory controller 
 
-The waypoints are generated using cubic spline interpolation from a set of predefined waypoints.
-Note that the trajectory uses pre-defined waypoints instead of dynamically generating a good path.
+The controller is designed to be modular, with separate components for path generation, timing, and trajectory generation and quick swappable 
+
+Current architecture for the entry challenge  
+
+- Simple three point entry center exit waypoint selection with simple collision avoidance for the gates
+- Between gates A* Brute Force Oooga Booga path generator using a 3D Occupancy grid and point snapping and waypoint pruning
+- Very simple distance based timing
+- And still using baseline MPC that is given as example
+
+A lot of future improvement possible, but I was low on time and this should be enough for the entry test
+
+Idea collection: 
+- Weighted and dynamic aware A*
+- Better timing and trajectory generation
+- Better modularity
+- RL based optimizatio
+
 """
 
 from __future__ import annotations  # Python 3.10 type hints
@@ -197,7 +211,7 @@ class AttitudeMPC(Controller):
         self.path_gen = AStarGatePathGenerator(
             grid_resolution=0.05,
             safety_margin=0.05,
-            obstacle_radius=0.2,
+            obstacle_radius=0.21,
             prune_path=True,
             )
         ##self.timing = UniformTiming()
@@ -416,6 +430,7 @@ class AttitudeMPC(Controller):
             return True
 
         return False
+    
     def step_callback(
         self,
         action: NDArray[np.floating],
