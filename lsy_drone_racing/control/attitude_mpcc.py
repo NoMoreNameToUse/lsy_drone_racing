@@ -63,7 +63,7 @@ class MPCCConfig:
     r_yaw: float = 0.5                    # Yaw rate penalty
     
     # Speed incentive
-    mu_speed: float = 10.0                  # Progress reward
+    mu_speed: float = 9.0                  # Progress reward
     w_speed_gate: float = 10.0               # Speed penalty at gates
     
     #Cost weight multipliers
