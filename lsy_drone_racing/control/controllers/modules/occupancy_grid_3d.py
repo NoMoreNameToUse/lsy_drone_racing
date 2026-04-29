@@ -47,7 +47,7 @@ class OccupancyGrid3D:
         self.obstacles_pos = np.asarray(obs["obstacles_pos"], dtype=float)
 
         gate_outer_margin: float = 0.25
-        gate_inner_margin: float = 0.16
+        gate_inner_margin: float = 0.17
         gate_plane_margin: float = 0.25
 
         self.gate_outer_margin = gate_outer_margin
