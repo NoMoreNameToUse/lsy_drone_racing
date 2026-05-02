@@ -187,6 +187,9 @@ class AStarGatePathGenerator:
         endpoint_snap_distance: float = 0.30,
         prune_path: bool = False,
         final_extension_distance: float = 0.60,
+        velocity_bias_weight: float = 0.20,
+        velocity_bias_decay: float = 8.0,
+        min_velocity_for_bias: float = 0.10,
     ):
         self.gate_passing_generator = (
             GatePassingPathGenerator(max_nudge=0.0)
@@ -201,9 +204,13 @@ class AStarGatePathGenerator:
         self.endpoint_snap_distance = endpoint_snap_distance
         self.prune_path = prune_path
         self.final_extension_distance = final_extension_distance
+        self.velocity_bias_weight = velocity_bias_weight
+        self.velocity_bias_decay = velocity_bias_decay
+        self.min_velocity_for_bias = min_velocity_for_bias
 
     def generate(self, obs, config=None):
         mandatory = self.gate_passing_generator.generate(obs, config)
+        current_velocity = np.asarray(obs.get("vel", np.zeros(3)), dtype=float)
 
         grid = OccupancyGrid3D(
             obs=obs,
@@ -225,7 +232,13 @@ class AStarGatePathGenerator:
             center = mandatory[base + 1]
             exit_ = mandatory[base + 2]
 
-            astar_segment = self.plan_astar(grid, current, entry)
+            segment_velocity = current_velocity if gate_i == 0 else None
+            astar_segment = self.plan_astar(
+                grid,
+                current,
+                entry,
+                preferred_velocity=segment_velocity,
+            )
             astar_segment = self._maybe_prune_segment(astar_segment, grid)
 
             if len(astar_segment) > 1:
@@ -257,7 +270,13 @@ class AStarGatePathGenerator:
             finish = last_gate_pos + self.final_extension_distance * forward
             finish = self.gate_passing_generator._clip_z(finish)
 
-            astar_segment = self.plan_astar(grid, current, finish)
+            final_segment_velocity = current_velocity if num_gates == 0 else None
+            astar_segment = self.plan_astar(
+                grid,
+                current,
+                finish,
+                preferred_velocity=final_segment_velocity,
+            )
             astar_segment = self._maybe_prune_segment(astar_segment, grid)
 
             if len(astar_segment) > 1:
@@ -267,7 +286,7 @@ class AStarGatePathGenerator:
 
         return np.asarray(final_path, dtype=float)
 
-    def plan_astar(self, grid, start, goal):
+    def plan_astar(self, grid, start, goal, preferred_velocity=None):
         start_idx = grid.world_to_grid(start)
         goal_idx = grid.world_to_grid(goal)
 
@@ -308,6 +327,10 @@ class AStarGatePathGenerator:
             snapped_goal_idx,
             max_iterations=self.max_astar_iterations,
             heuristic_weight=self.heuristic_weight,
+            preferred_direction=preferred_velocity,
+            direction_bias_weight=self.velocity_bias_weight,
+            direction_bias_decay=self.velocity_bias_decay,
+            min_direction_speed=self.min_velocity_for_bias,
         )
 
         if idx_path is None:

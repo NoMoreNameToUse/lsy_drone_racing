@@ -1,4 +1,4 @@
-"""This module implements an example MPC using attitude control for a quadrotor.
+"""
 
 The Cavemen Approach for a exploratory controller 
 
