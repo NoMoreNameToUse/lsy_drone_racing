@@ -19,7 +19,7 @@ def astar_3d(
     max_iterations=200_000,
     heuristic_weight=1.0,
     preferred_direction=None,
-    direction_bias_weight=0.0,
+    direction_bias_weight=1.0,
     direction_bias_decay=8.0,
     min_direction_speed=0.10,
 ):

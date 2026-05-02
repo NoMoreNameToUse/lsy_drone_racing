@@ -54,8 +54,8 @@ class MotionAwareTiming:
         min_segment_time: float = 0.15,
         turn_time_gain: float = 0.5,
         turn_exponent: float = 1.5,
-        vertical_time_gain: float = 0.25,
-        vertical_ratio_power: float = 1.0,
+        vertical_time_gain: float = 0.5,
+        vertical_ratio_power: float = 2.0,
     ):
         self.nominal_speed = nominal_speed
         self.min_segment_time = min_segment_time
