@@ -12,7 +12,17 @@ NEIGHBOR_STEPS_18 = tuple(
 )
 
 
-def astar_3d(grid, start_idx, goal_idx, max_iterations=200_000, heuristic_weight=1.0):
+def astar_3d(
+    grid,
+    start_idx,
+    goal_idx,
+    max_iterations=200_000,
+    heuristic_weight=1.0,
+    preferred_direction=None,
+    direction_bias_weight=1.0,
+    direction_bias_decay=8.0,
+    min_direction_speed=0.10,
+):
     """
     Basic 26-connected 3D A*.
 
@@ -20,6 +30,13 @@ def astar_3d(grid, start_idx, goal_idx, max_iterations=200_000, heuristic_weight
         grid: OccupancyGrid3D
         start_idx: tuple[int, int, int]
         goal_idx: tuple[int, int, int]
+
+        preferred_direction: Optional 3D world/grid direction to bias early expansion.
+        direction_bias_weight: Soft penalty weight for moves that deviate from
+            preferred_direction. Use 0.0 to disable.
+        direction_bias_decay: Exponential decay length (in path-cost units) so the
+            bias is strongest near start and fades with traveled distance.
+        min_direction_speed: Minimum norm required to activate preferred_direction.
 
     Returns:
         list of grid indices, or None if planning failed.
@@ -44,6 +61,19 @@ def astar_3d(grid, start_idx, goal_idx, max_iterations=200_000, heuristic_weight
 
     sx, sy, sz = start_idx
     gx, gy, gz = goal_idx
+
+    preferred_dir = None
+    if preferred_direction is not None and direction_bias_weight > 0.0:
+        preferred_direction = np.asarray(preferred_direction, dtype=float).reshape(-1)
+
+        if preferred_direction.size >= 3:
+            preferred_direction = preferred_direction[:3]
+            preferred_norm = np.linalg.norm(preferred_direction)
+
+            if preferred_norm >= min_direction_speed:
+                preferred_dir = preferred_direction / preferred_norm
+
+    direction_bias_decay = max(float(direction_bias_decay), 1e-6)
 
     g_score[sx, sy, sz] = 0.0
 
@@ -85,7 +115,17 @@ def astar_3d(grid, start_idx, goal_idx, max_iterations=200_000, heuristic_weight
             if closed[nx, ny, nz] or occupied[nx, ny, nz]:
                 continue
 
-            tentative_g = current_g + step_cost
+            directional_penalty = 0.0
+            if preferred_dir is not None:
+                # Penalize motion that deviates from current velocity direction,
+                # but fade this preference as we move farther from the start.
+                move_dir = np.array([dx, dy, dz], dtype=float) / step_cost
+                alignment = float(np.dot(move_dir, preferred_dir))
+                misalignment = 0.5 * (1.0 - alignment)
+                decay = math.exp(-current_g / direction_bias_decay)
+                directional_penalty = direction_bias_weight * misalignment * decay
+
+            tentative_g = current_g + step_cost + directional_penalty
 
             if tentative_g >= g_score[nx, ny, nz]:
                 continue
