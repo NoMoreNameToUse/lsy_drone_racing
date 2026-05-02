@@ -73,8 +73,8 @@ class AttitudeMPC(Controller):
         ##self.timing = UniformTiming()
 
         self.timing = DistanceTiming(
-            nominal_speed=1.3,
-            min_segment_time=0.12,
+            nominal_speed=1.28,
+            min_segment_time=0.122,
         )
 
         # generate once
