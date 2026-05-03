@@ -37,14 +37,14 @@ sim = [
     "warp-lang",
 ]
 # option[gpu]: simulation with gpu
-gpu = ["jax[cuda12]"]
+gpu = ["jax[cuda13]"]
 # option[deploy]: deploy to real drones
 deploy = [
     "cfclient",
     "drone-estimators",
 ]
 # option[rl]: train rl policy
-rl = ["torch == 2.8.0", "wandb"]
+rl = ["torch == 2.10.0", "wandb"]
 # option[gamepad]: use a gamepad as input for your drone
 gamepad = ["pygame"]
 
@@ -73,11 +73,11 @@ cmake = "*"
 compilers = ">=1.9.0, <1.11.0"
 make = "*"
 openblas = ">=0.3.30,<0.4"
+pytorch = ">=2.7.1,<3"
+wandb = ">=0.26.1,<0.27"
 
 [tool.pixi.pypi-dependencies]
 lsy_drone_racing = { path = ".", editable = true }
-torch = ">=2.0.0"
-wandb = ">=0.17.0"
 
 [tool.pixi.activation]
 scripts = ["tools/setup_acados.sh"]
