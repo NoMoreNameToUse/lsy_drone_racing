@@ -76,6 +76,7 @@ openblas = ">=0.3.30,<0.4"
 
 [tool.pixi.pypi-dependencies]
 lsy_drone_racing = { path = ".", editable = true }
+torch = ">=2.0.0"
 
 [tool.pixi.activation]
 scripts = ["tools/setup_acados.sh"]
