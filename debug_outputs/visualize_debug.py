@@ -290,8 +290,10 @@ def main():
     start_pos = data["start_pos"]
     raw_waypoints = data["raw_waypoints"]
     traj_pos = data["traj_pos"]
+    planner_name = str(np.asarray(data["planner_name"]).item()) if "planner_name" in data.files else "unknown"
 
     print("Loaded:", DEBUG_FILE)
+    print("planner_name:", planner_name)
     print("gates_pos:", gates_pos.shape)
     print("obstacles_pos:", obstacles_pos.shape)
     print("raw_waypoints:", raw_waypoints.shape)
@@ -345,7 +347,7 @@ def main():
         )
 
     fig.update_layout(
-        title="Drone Racing Debug Path - 3D View",
+        title=f"Drone Racing Debug Path - 3D View ({planner_name})",
         scene=dict(
             xaxis_title="x [m]",
             yaxis_title="y [m]",

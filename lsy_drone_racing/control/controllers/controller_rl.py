@@ -36,7 +36,7 @@ from lsy_drone_racing.control import Controller
 from lsy_drone_racing.control.train_rl import Agent
 
 ## Modular imports
-from lsy_drone_racing.control.controllers.modules.path_generator import AStarGatePathGenerator
+from lsy_drone_racing.control.controllers.modules.path_generator import make_path_generator
 from lsy_drone_racing.control.controllers.modules.timing_module import DistanceTiming
 from lsy_drone_racing.control.controllers.modules.trajectory_module import SplineTrajectory
 
@@ -62,19 +62,14 @@ class AttitudeMPC(Controller):
         self.freq = config.env.freq
 
         # modules
-        # self.path_gen = AStarGatePathGenerator()
-        # self.path_gen = WaypointPathGenerator()
-        self.path_gen = AStarGatePathGenerator(
-            grid_resolution=0.05,
-            safety_margin=0.06,
-            obstacle_radius=0.21,
-            prune_path=True,
-            )
+        planner_name = "rrt_star"
+        self._planner_name = planner_name
+        self.path_gen = make_path_generator(planner_name)
         ##self.timing = UniformTiming()
 
         self.timing = DistanceTiming(
-            nominal_speed=1.28,
-            min_segment_time=0.123,
+            nominal_speed=1.0,
+            min_segment_time=0.15,
         )
 
         # generate once
@@ -97,21 +92,7 @@ class AttitudeMPC(Controller):
         self._last_replan_tick = 0
 
         ## Debug outputs
-        debug_dir = Path("debug_outputs")
-        debug_dir.mkdir(exist_ok=True)
-
-        np.savez(
-            debug_dir / "level1_path_debug.npz",
-            gates_pos=np.asarray(obs["gates_pos"], dtype=float),
-            gates_quat=np.asarray(obs["gates_quat"], dtype=float),
-            obstacles_pos=np.asarray(obs["obstacles_pos"], dtype=float),
-            start_pos=np.asarray(obs["pos"], dtype=float),
-            raw_waypoints=np.asarray(self._raw_waypoints, dtype=float),
-            traj_pos=np.asarray(self.trajectory._pos, dtype=float),
-            traj_vel=np.asarray(self.trajectory._vel, dtype=float),
-            time_grid=np.asarray(getattr(self.trajectory, "_time_grid", []), dtype=float),
-        )
-
+        self._save_path_debug(obs)
         self.print_trajectory_obstacle_clearance(
             self.trajectory._pos,
             np.asarray(obs["obstacles_pos"], dtype=float),
@@ -150,6 +131,26 @@ class AttitudeMPC(Controller):
         self._finished = False
 
     ## Debug
+    def _save_path_debug(self, obs):
+        debug_dir = Path("debug_outputs")
+        debug_dir.mkdir(exist_ok=True)
+
+        payload = dict(
+            planner_name=np.asarray(self._planner_name),
+            gates_pos=np.asarray(obs["gates_pos"], dtype=float),
+            gates_quat=np.asarray(obs["gates_quat"], dtype=float),
+            obstacles_pos=np.asarray(obs["obstacles_pos"], dtype=float),
+            start_pos=np.asarray(obs["pos"], dtype=float),
+            raw_waypoints=np.asarray(self._raw_waypoints, dtype=float),
+            traj_pos=np.asarray(self.trajectory._pos, dtype=float),
+            traj_vel=np.asarray(self.trajectory._vel, dtype=float),
+            time_grid=np.asarray(getattr(self.trajectory, "_time_grid", []), dtype=float),
+        )
+
+        # Keep the historical filename for visualize_debug.py compatibility.
+        np.savez(debug_dir / "level1_path_debug.npz", **payload)
+        np.savez(debug_dir / f"{self._planner_name}_debug.npz", **payload)
+
     def print_trajectory_obstacle_clearance(self, traj_pos, obstacles, min_clearance=0.25):
         for j, obs_p in enumerate(obstacles):
             d_xy = np.linalg.norm(traj_pos[:, :2] - obs_p[:2], axis=1)
@@ -227,6 +228,7 @@ class AttitudeMPC(Controller):
 
         t = self.timing.compute(self._raw_waypoints)
         self.trajectory = SplineTrajectory(self._raw_waypoints, t, self._config.env.freq)
+        self._save_path_debug(obs)
 
         t2 = time.perf_counter()
         print(
