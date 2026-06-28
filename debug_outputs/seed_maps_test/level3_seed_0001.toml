@@ -1,0 +1,110 @@
+[controller]
+file = "controllers/controller_rl.py"
+
+[deploy]
+check_drone_start_pos = true
+check_race_track = true
+real_track_objects = true
+[[deploy.drones]]
+id = 10
+channel = 100
+drone_model = "cf21B_500"
+
+[env]
+control_mode = "attitude"
+freq = 50
+id = "DroneRacing-v0"
+seed = 1
+sensor_range = 0.7
+
+[sim]
+attitude_freq = 500
+camera = -1
+drone_model = "cf21B_500"
+freq = 500
+physics = "first_principles"
+render = false
+[[sim.cam_config]]
+distance = 5.0
+azimuth = 180.0
+elevation = -25.0
+lookat = [ 0.0, 0.0, 0.0,]
+
+[env.track]
+randomize = false
+[[env.track.drones]]
+pos = [ 0.05358297750353813, 0.007419514935463667, 0.017839698120951653,]
+rpy = [ 0.0, 0.0, 0.0,]
+vel = [ 0, 0, 0,]
+ang_vel = [ 0, 0, 0,]
+
+[[env.track.gates]]
+pos = [ -0.3656761050224304, 0.05825665593147278, 0.6344931721687317,]
+rpy = [ 0.0, 0.0, -2.785430443706659,]
+
+[[env.track.gates]]
+pos = [ -1.7059316635131836, -0.7392070889472961, 1.2627016305923462,]
+rpy = [ 0.0, 0.0, -1.8491242127921903,]
+
+[[env.track.gates]]
+pos = [ 0.1631677746772766, -0.7584215402603149, 0.6803190112113953,]
+rpy = [ 0.0, 0.0, -0.7699703865827339,]
+
+[[env.track.gates]]
+pos = [ 1.651687502861023, -0.795271635055542, 1.1048461198806763,]
+rpy = [ 0.0, 0.0, -0.4105114103818961,]
+
+[[env.track.obstacles]]
+pos = [ 0.8297939300537109, 0.3623189926147461, 1.5068278312683105,]
+
+[[env.track.obstacles]]
+pos = [ -1.7081749439239502, -0.5698319673538208, 1.535396933555603,]
+
+[[env.track.obstacles]]
+pos = [ -0.10509912669658661, -0.8888419270515442, 1.5730013847351074,]
+
+[[env.track.obstacles]]
+pos = [ 1.4511305093765259, -1.0864897966384888, 1.5881882905960083,]
+
+[env.disturbances.action]
+fn = "normal"
+scale = 0.001
+
+[env.disturbances.dynamics]
+fn = "uniform"
+
+[env.randomizations.drone_inertia]
+fn = "uniform"
+
+[env.randomizations.drone_mass]
+fn = "uniform"
+
+[env.randomizations.drone_pos]
+fn = "uniform"
+
+[env.randomizations.drone_rpy]
+fn = "uniform"
+
+[env.track.safety_limits]
+pos_limit_high = [ 2.5, 1.5, 2.0,]
+pos_limit_low = [ -2.5, -1.5, -0.001,]
+
+[env.disturbances.dynamics.kwargs]
+maxval = [ 0.1, 0.1, 0.1,]
+minval = [ -0.1, -0.1, -0.1,]
+
+[env.randomizations.drone_inertia.kwargs]
+maxval = [ 1e-6, 1e-6, 1e-6,]
+minval = [ -1e-6, -1e-6, -1e-6,]
+
+[env.randomizations.drone_mass.kwargs]
+maxval = 0.005
+minval = -0.005
+
+[env.randomizations.drone_pos.kwargs]
+maxval = [ 0.1, 0.1, 0.02,]
+minval = [ -0.1, -0.1, 0.0,]
+
+[env.randomizations.drone_rpy.kwargs]
+maxval = [ 0.1, 0.1, 0.1,]
+minval = [ -0.1, -0.1, -0.1,]

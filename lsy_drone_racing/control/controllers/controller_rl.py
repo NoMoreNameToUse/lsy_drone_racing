@@ -62,14 +62,14 @@ class AttitudeMPC(Controller):
         self.freq = config.env.freq
 
         # modules
-        planner_name = "rrt_star"
+        planner_name = "astar"
         self._planner_name = planner_name
         self.path_gen = make_path_generator(planner_name)
         ##self.timing = UniformTiming()
 
         self.timing = DistanceTiming(
-            nominal_speed=1.0,
-            min_segment_time=0.15,
+            nominal_speed=0.8,
+            min_segment_time=0.2,
         )
 
         # generate once

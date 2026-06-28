@@ -1,10 +1,11 @@
-# Level 3
+# Level 1
 
-# | Evaluation Scenario | Randomized Inertial Properties | Randomized Obstacles, Gates | Randomized Tracks | Notes           |
-# | :-----------------: | :----------------------------: | :-------------------------: | :---------------: | :-------------: |
-# | `level3.toml`       | *Yes*                          | *Yes*                       | *Yes*             | Online planning |
+# | Evaluation Scenario | Randomized Inertial Properties | Randomized Obstacles, Gates | Randomized Tracks | Notes    |
+# | :-----------------: | :----------------------------: | :-------------------------: | :---------------: | :------: |
+# | `level1.toml`       | *Yes*                          | *No*                        | *No*              | Adaptive |
 [controller]
-file = "controllers/controller_rl.py" # Put your controller file name here. Specifying a controller as argument to scripts will override this setting. Controllers are located in `lsy_drone_racing/control/`
+file = "controllers/controller_mppi.py" # Put your controller file name here. Specifying a controller as argument to scripts will override this setting. Controllers are located in `lsy_drone_racing/control/`
+#file = "attitude_controller.py" # Put your controller file name here. Specifying a controller as argument to scripts will override this setting. Controllers are located in `lsy_drone_racing/control/`
 
 [deploy]
 ### Settings only relevant for deployment
@@ -51,36 +52,36 @@ control_mode = "attitude"  # Control mode of the environment. Can be either "sta
 # Full track radomization. When activated, the position (x & y) and orientation (yaw) 
 # of the below given gates, obstacles and drones is randomized inside the safety limits. 
 # Note: The order and therefore also height is not randomized!
-randomize = true
+randomize = false
 
 # Tall gates: 1.195m height. Short gates: 0.695m height. Height is measured from the ground to the center of the gate.
 # Gates are square. Gates are 0.72m wide (outer dimensions of the frame) with a 0.4m wide opening.
 [[env.track.gates]]
-pos = [0.0, 0.0, 0.7]
-rpy = [0.0, 0.0, 0.0]
+pos = [0.5 , 0.25, 0.7]
+rpy = [0.0, 0.0, -0.78]
 [[env.track.gates]]
-pos = [0.0, 0.0, 1.2]
-rpy = [0.0, 0.0, 0.0]
+pos = [1.05, 0.75, 1.2]
+rpy = [0.0, 0.0, 2.35]
 [[env.track.gates]]
-pos = [0.0, 0.0, 0.7]
-rpy = [0.0, 0.0, 0.0]
+pos = [-1.0, -0.25, 0.7]
+rpy = [0.0, 0.0, 3.14]
 [[env.track.gates]]
-pos = [0.0, 0.0, 1.2]
+pos = [0.0, -0.75, 1.2]
 rpy = [0.0, 0.0, 0.0]
 
 # Obstacle height: 1.52m + reflective marker on top. Height is measured from the ground to the top of the obstacle.
 # Obstacles are cylinders with a diameter of 0.03m.
 [[env.track.obstacles]]
-pos = [0.0, 0.0, 1.55]
+pos = [0.0, 0.75, 1.55]
 [[env.track.obstacles]]
-pos = [0.0, 0.0, 1.55]
+pos = [1.0, 0.25, 1.55]
 [[env.track.obstacles]]
-pos = [0.0, 0.0, 1.55]
+pos = [-1.5, -0.25, 1.55]
 [[env.track.obstacles]]
-pos = [0.0, 0.0, 1.55]
+pos = [-0.5, -0.75, 1.55]
 
 [[env.track.drones]]
-pos = [0.0, 0.0, 0.0]
+pos = [-1.5, 0.75, 0.01]
 rpy = [0.0, 0.0, 0.0]
 vel = [0, 0, 0]
 ang_vel = [0, 0, 0]
@@ -123,21 +124,3 @@ fn = "uniform"
 [env.randomizations.drone_inertia.kwargs]
 minval = [-0.000001, -0.000001, -0.000001]
 maxval = [0.000001, 0.000001, 0.000001]
-
-[env.randomizations.gate_pos]
-fn = "uniform"
-[env.randomizations.gate_pos.kwargs]
-minval = [-0.15, -0.15, -0.1]
-maxval = [0.15, 0.15, 0.1]
-
-[env.randomizations.gate_rpy]
-fn = "uniform"
-[env.randomizations.gate_rpy.kwargs]
-minval = [-0.05, -0.1, -0.2]
-maxval = [0.05, 0.1, 0.2]
-
-[env.randomizations.obstacle_pos]
-fn = "uniform"
-[env.randomizations.obstacle_pos.kwargs]
-minval = [-0.15, -0.15, -0.05]
-maxval = [0.15, 0.15, 0.05]
