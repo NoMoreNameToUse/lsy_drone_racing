@@ -1,0 +1,22 @@
+==============================================================================
+FLIGHT ANALYSIS  |  flight_seed223246164.npz
+seed=223246164  reason=terminated  ticks=104  duration=2.08s  freq=50Hz
+==============================================================================
+Summary metrics:
+  min obstacle clearance : 0.425 m
+  min gate-rim clearance : 0.198 m
+  max position error     : 0.472 m   (mean 0.232)
+  max speed              : 2.631 m/s
+  max speed error        : 1.567 m/s
+  max reversal angle     : exec 135 deg, planned 22 deg (window 8 ticks)
+
+Events (7 total): {'DEVIATION_SPEED': 5, 'DEVIATION_POS': 1, 'COLLISION_END': 1}
+------------------------------------------------------------------------------
+  DEVIATION_SPEED    t=0.02-0.18s       value=  1.272  pos=(+0.00,+0.09,-0.00)
+  DEVIATION_SPEED    t=0.30-0.46s       value=  1.567  pos=(+0.35,-0.21,+0.25)
+  DEVIATION_SPEED    t=0.50-0.68s       value=  1.397  pos=(+0.42,-0.26,+0.31)
+  DEVIATION_SPEED    t=1.46-1.48s       value=  0.834  pos=(+1.25,-0.44,+0.69)
+  DEVIATION_SPEED    t=1.52-1.74s       value=  1.237  pos=(+1.43,-0.52,+0.72)
+  DEVIATION_POS      t=1.72-2.08s       value=  0.472  pos=(+1.92,-0.68,+0.91)
+  COLLISION_END      t=2.08s            value=  0.429  pos=(+1.99,-0.65,+0.86)  [run ended terminated; nearest gate 0 (d=0.43 m)]
+==============================================================================

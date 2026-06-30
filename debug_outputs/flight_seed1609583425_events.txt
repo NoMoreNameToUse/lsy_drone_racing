@@ -1,0 +1,31 @@
+==============================================================================
+FLIGHT ANALYSIS  |  flight_seed1609583425.npz
+seed=1609583425  reason=terminated  ticks=563  duration=11.26s  freq=50Hz
+==============================================================================
+Summary metrics:
+  min obstacle clearance : 0.106 m
+  min gate-rim clearance : 0.123 m
+  max position error     : 0.305 m   (mean 0.082)
+  max speed              : 2.135 m/s
+  max speed error        : 1.254 m/s
+  max reversal angle     : exec 156 deg, planned 84 deg (window 8 ticks)
+
+Events (16 total): {'DEVIATION_SPEED': 9, 'DEVIATION_POS': 1, 'NEAR_OBSTACLE': 4, 'REVERSAL_EXECUTED': 1, 'COLLISION_END': 1}
+------------------------------------------------------------------------------
+  DEVIATION_SPEED    t=0.02-0.22s       value=  1.254  pos=(-0.07,-0.04,-0.00)
+  DEVIATION_POS      t=0.28-0.34s       value=  0.305  pos=(-0.16,-0.04,+0.04)
+  DEVIATION_SPEED    t=0.38-0.46s       value=  1.031  pos=(-0.39,-0.03,+0.17)
+  DEVIATION_SPEED    t=0.50-0.66s       value=  1.159  pos=(-0.47,-0.03,+0.21)
+  NEAR_OBSTACLE      t=0.80-0.94s       value=  0.235  pos=(-0.97,+0.09,+0.35)  [obstacle 0]
+  REVERSAL_EXECUTED  t=0.82-0.92s       value=155.745  pos=(-0.97,+0.09,+0.35)
+  DEVIATION_SPEED    t=0.94-0.96s       value=  0.754  pos=(-1.01,+0.12,+0.34)
+  DEVIATION_SPEED    t=1.00s            value=  0.661  pos=(-1.01,+0.12,+0.34)
+  NEAR_OBSTACLE      t=1.14-1.62s       value=  0.116  pos=(-1.10,-0.01,+0.61)  [obstacle 0]
+  DEVIATION_SPEED    t=8.06-8.08s       value=  0.621  pos=(+1.55,+0.94,+0.68)
+  DEVIATION_SPEED    t=8.18-8.22s       value=  0.691  pos=(+1.60,+0.91,+0.65)
+  DEVIATION_SPEED    t=8.26-8.32s       value=  0.742  pos=(+1.62,+0.91,+0.63)
+  NEAR_OBSTACLE      t=9.36-9.38s       value=  0.250  pos=(+1.63,+0.16,+0.69)  [obstacle 2]
+  NEAR_OBSTACLE      t=10.98-11.26s     value=  0.106  pos=(+0.10,-0.39,+0.81)  [obstacle 3]
+  DEVIATION_SPEED    t=11.22-11.26s     value=  0.687  pos=(+0.10,-0.39,+0.81)
+  COLLISION_END      t=11.26s           value=  0.106  pos=(+0.10,-0.39,+0.81)  [run ended terminated; nearest obstacle 3 (d=0.11 m)]
+==============================================================================
