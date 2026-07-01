@@ -16,9 +16,6 @@ crawling). It assigns per-waypoint timestamps ``t`` from a speed profile that:
 * **stays feasible** -- a forward/backward pass limits tangential
   acceleration/deceleration to ``a_max``, so the commanded speed never changes
   faster than the tracker can follow.
-
-Drop-in for ``DistanceTiming``: ``compute(waypoints, clearance=None, t_total=None)``
-returns the ``(M,)`` strictly increasing timestamps the trajectory consumes.
 """
 
 from __future__ import annotations
@@ -205,3 +202,40 @@ class DynamicTiming:
         t = np.zeros(len(v))
         t[1:] = np.cumsum(dt)
         return t
+
+class DistanceTiming:
+    """
+    Assigns time based on path segment length.
+
+    This avoids giving the same time to tiny gate-entry segments and long
+    between-gate travel segments.
+    """
+
+    def __init__(self, nominal_speed=0.6, min_segment_time=0.15):
+        self.nominal_speed = nominal_speed
+        self.min_segment_time = min_segment_time
+
+    def compute(self, waypoints, t_total=None):
+        waypoints = np.asarray(waypoints, dtype=float)
+
+        if len(waypoints) <= 1:
+            return np.zeros(len(waypoints), dtype=float)
+
+        segment_lengths = np.linalg.norm(np.diff(waypoints, axis=0), axis=1)
+        segment_times = segment_lengths / self.nominal_speed
+
+        segment_times = np.maximum(segment_times, self.min_segment_time)
+
+        t = np.zeros(len(waypoints))
+        t[1:] = np.cumsum(segment_times)
+
+        if t_total is not None and t[-1] > 1e-9:
+            t *= float(t_total) / t[-1]
+
+        return t
+    
+class UniformTiming:
+    # Dead simple, I still remember how to use linespace! :D 
+    # Update: too simple :C did not work well
+    def compute(self, waypoints, t_total):
+        return np.linspace(0, t_total, len(waypoints))

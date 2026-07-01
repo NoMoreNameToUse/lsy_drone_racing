@@ -1,33 +1,16 @@
+"""Gate-aware path generators for the MPPI controller (moved out of the former
+``zihan`` folder). Provides ``GatePassingPathGenerator`` plus A*/Theta*/RRT*/
+D*-Lite gate path generators; identical baseline modules (occupancy grid, A*
+kernel) are repointed to ``initial_challenge`` rather than duplicated.
+"""
+
 import numpy as np
-
-# Baseline fixed waypoint
-class WaypointPathGenerator:
-    def generate(self, obs, config):
-        return np.array(
-            [
-                [-1.5, 0.75, 0.05],
-                [-1.0, 0.55, 0.4],
-                [0.3, 0.35, 0.7],
-                [1.3, -0.15, 0.9],
-                [0.85, 0.85, 1.2],
-                [-0.5, -0.05, 0.7],
-                [-1.2, -0.2, 0.8],
-                [-1.2, -0.2, 1.2],
-                [-0.0, -0.7, 1.2],
-                [0.5, -0.75, 1.2],
-            ]
-        )
-
-
-
-
-
 from scipy.spatial.transform import Rotation as R
-from lsy_drone_racing.control.controllers.modules.zihan.occupancy_grid_3d import OccupancyGrid3D
-from lsy_drone_racing.control.controllers.modules.zihan.astar_3d import astar_3d
-from lsy_drone_racing.control.controllers.modules.zihan.d_star_lite_3d import d_star_lite_3d
-from lsy_drone_racing.control.controllers.modules.zihan.theta_star_3d import theta_star_3d
-from lsy_drone_racing.control.controllers.modules.zihan.rrt_star_3d import rrt_star_3d
+from lsy_drone_racing.control.controllers.modules.initial_challenge.occupancy_grid_3d import OccupancyGrid3D
+from lsy_drone_racing.control.controllers.modules.initial_challenge.astar_3d import astar_3d
+from lsy_drone_racing.control.controllers.modules.d_star_lite_3d import d_star_lite_3d
+from lsy_drone_racing.control.controllers.modules.theta_star_3d import theta_star_3d
+from lsy_drone_racing.control.controllers.modules.rrt_star_3d import rrt_star_3d
 
 
 class GatePassingPathGenerator:

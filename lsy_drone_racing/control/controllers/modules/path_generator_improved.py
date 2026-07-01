@@ -1,27 +1,11 @@
-"""Tier-0 optimized A* gate path generator.
+"""Gate-anchored path generator (the pipeline's main planner).
 
-``AStarImprovedPathGenerator`` produces the same kind of path as
-``AStarGatePathGenerator`` (gate entry/center/exit anchors connected by A*
-through free space), but adds the Tier-0 efficiency improvements:
-
-- the optimized kernel :func:`astar_3d_improved` (no per-edge numpy allocation),
-- a per-segment **search window** so A* only explores / allocates the local
-  region between the current point and the next anchor,
-- optional **coarse-to-fine** planning: a quick coarse-resolution A* defines a
-  corridor inside which the fine-resolution A* searches.
-
-The existing ``GatePassingPathGenerator`` and ``OccupancyGrid3D`` are reused
-unmodified, and the original ``AStarGatePathGenerator`` is left untouched for
-comparison.
-
-Determinism / comparison note:
-    The inner-loop optimization is bit-for-bit identical to the original. The
-    search window and coarse-to-fine corridor are search-space restrictions and
-    *can* change the result if the true optimum leaves the restricted region
-    (both have straight-line / unrestricted fallbacks). Set
-    ``use_search_window=False`` and ``use_coarse_to_fine=False`` to reproduce the
-    original full-grid A* exactly while still benefiting from the inner-loop
-    speedup.
+Connects mandatory gate anchors through free space and adds the reversal /
+side-commitment handling the tracker needs:
+- mandatory gate anchors from ``GatePassingPathGenerator``,
+- shortest-path segment connection with the ``AStar3DBarebone`` solver,
+- reversal/flyback opening blocks and obstacle side-commitment (per segment),
+- optional conservative path pruning inside each free-space segment.
 """
 
 from __future__ import annotations
@@ -29,28 +13,66 @@ from __future__ import annotations
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
-from lsy_drone_racing.control.controllers.modules.astar_3d_improved import AStar3DImproved
+from lsy_drone_racing.control.controllers.modules.astar_3d_barebone import AStar3DBarebone
 from lsy_drone_racing.control.controllers.modules.occupancy_grid_3d_improved import OccupancyGrid3D
-from lsy_drone_racing.control.controllers.modules.initial_challenge.path_generator import GatePassingPathGenerator
 
 
-class _BareboneSolverAdapter:
-    """Adapt ``AStar3DBarebone`` to the ``AStar3DImproved.plan(grid, ...)`` API.
+class GatePassingPathGenerator:
+    """Gate entry / center / exit anchors for the remaining gates.
 
-    The barebone solver is shortest-path only and works on ``grid.occupied``, so
-    the velocity-bias / window / mask / cost-field keyword arguments used by the
-    pure-Python solver are accepted and ignored.
+    For each gate still ahead of the drone, emits three anchors -- a point
+    ``gate_entry_distance`` before the gate along its (world) normal, the gate
+    centre, and a point the same distance after -- prefixed by the drone's start:
+    ``[start, entry_0, center_0, exit_0, entry_1, ...]``
     """
 
-    def __init__(self):
-        self._solver = AStar3DBarebone()
+    def __init__(
+        self,
+        gate_entry_distance: float = 0.2,
+        min_z: float = 0.08,
+        max_z: float = 1.60,
+        gate_forward_axis=None,
+    ):
+        self.gate_entry_distance = gate_entry_distance
+        self.min_z = min_z
+        self.max_z = max_z
+        self.gate_forward_axis = (
+            np.array([1.0, 0.0, 0.0])
+            if gate_forward_axis is None
+            else np.asarray(gate_forward_axis, dtype=float)
+        )
 
-    def plan(self, grid, start_idx, goal_idx, *, heuristic_weight=1.0, **_ignored):
-        return self._solver.plan(grid.occupied, start_idx, goal_idx, heuristic_weight=heuristic_weight)
+    def generate(self, obs, config=None):
+        target_gate = int(np.asarray(obs.get("target_gate", 0)).item())
+        gates_pos = np.asarray(obs["gates_pos"], dtype=float)[target_gate:]
+        gates_quat = np.asarray(obs["gates_quat"], dtype=float)[target_gate:]
+        start_pos = np.asarray(obs["pos"], dtype=float)
+
+        waypoints = [self._clip_z(start_pos.copy())]
+        for gate_pos, gate_quat in zip(gates_pos, gates_quat):
+            forward = self._gate_forward(gate_quat)
+            waypoints.append(self._clip_z(gate_pos - self.gate_entry_distance * forward))
+            waypoints.append(self._clip_z(gate_pos.copy()))
+            waypoints.append(self._clip_z(gate_pos + self.gate_entry_distance * forward))
+        return np.asarray(waypoints, dtype=float)
+
+    def _gate_forward(self, gate_quat):
+        forward = R.from_quat(gate_quat).apply(self.gate_forward_axis)
+        return self._normalize(forward)
+
+    def _clip_z(self, p):
+        p = np.asarray(p, dtype=float).copy()
+        p[2] = np.clip(p[2], self.min_z, self.max_z)
+        return p
+
+    @staticmethod
+    def _normalize(v):
+        norm = np.linalg.norm(v)
+        return v if norm < 1e-9 else v / norm
 
 
 class AStarImprovedPathGenerator:
-    """Gate-anchored A* path generator with Tier-0 efficiency improvements."""
+    """Gate-anchored path generator: anchors + barebone A* + reversal/commit + pruning."""
 
     def __init__(
         self,
@@ -58,68 +80,34 @@ class AStarImprovedPathGenerator:
         grid_resolution: float = 0.075,
         safety_margin: float = 0.04,
         obstacle_radius: float = 0.20,
-        heuristic_weight: float = 1.15,
-        max_astar_iterations: int = 200_000,
+        heuristic_weight: float = 1.0,
         endpoint_snap_distance: float = 0.30,
         prune_path: bool = False,
-        final_extension_distance: float = 0.60,
-        velocity_bias_weight: float = 0.20,
-        velocity_bias_decay: float = 8.0,
-        min_velocity_for_bias: float = 0.10,
-        # --- Tier-0 options ---
-        # With reusable full-grid buffers the window no longer saves allocation
-        # and weighted A* already focuses exploration, so the window is net
-        # neutral-to-negative here; off by default. Kept for much larger grids.
-        use_search_window: bool = False,
-        window_margin: float = 0.40,
-        # Coarse-to-fine has per-segment overhead (a coarse plan + corridor mask)
-        # that does not pay off at this grid scale; left off by default. It is
-        # kept available for much larger / finer grids where the fine search
-        # dominates. See module docstring.
-        use_coarse_to_fine: bool = False,
-        coarse_factor: int = 2,
-        corridor_radius: float = 0.15,
-        # --- Clearance / risk cost (A: reshape A*'s cost) ---
-        # Penalize cells close to the obstacle poles so the path stays in the
-        # middle of free space, giving the tracker room to carry speed. Off by
-        # default so that (with window/coarse also off) the path stays identical
-        # to the original A*. The penalty is an extra cost rate that ramps from 0
-        # at ``clearance_dist`` metres outside the inflated pole up to
-        # ``clearance_weight`` at the inflated pole surface (raised to
-        # ``clearance_exponent``). Gate frames are deliberately NOT penalized:
-        # the drone must fly close through the aperture, and penalizing gates
-        # both fights the objective and blows up the search.
-        use_clearance_cost: bool = False,
-        clearance_weight: float = 0.4,
-        clearance_dist: float = 0.35,
-        clearance_exponent: float = 2.0,
-
-        # --- Momentum-aware replanning (two-candidate compare by est. time) ---
-        # On a replan the shortest path can demand a near-reversal (e.g. back
-        # through the gate just passed) because A* ignores the current velocity.
-        # When enabled, the velocity-bearing first segment is planned twice --
-        # the unconstrained shortest path vs a forward-committed path (routed
-        # through a look-ahead waypoint along the current velocity) -- and the
-        # faster one under a cheap time proxy is kept. The forward candidate is
-        # dropped when its departure is blocked, so a genuine detour/reversal
-        # still wins ("keep speed, but reverse if you must"). Off by default.
-        use_momentum_compare: bool = False,
-        momentum_min_speed: float = 0.5,
-        momentum_lookahead_time: float = 0.3,
-        momentum_min_dist: float = 0.2,
-        momentum_max_dist: float = 0.8,
-        speed_estimate: float = 2.0,
-        turn_penalty: float = 0.15,
-        # Seconds of penalty per (m/s of speed) per unit (1 - cos) of initial
-        # deviation from the current velocity. Speed-scaled (see _estimate_time).
-        initial_turn_penalty: float = 1000,
-        # --- Backend: barebone numba A* (shortest path only, 26-connected) ---
-        # Swaps the pure-Python solver for the JIT-compiled barebone A*. The
-        # velocity-bias keyword args are ignored by it (shortest path only).
-        use_barebone: bool = False,
+        final_extension_distance: float = 1,
+        # --- Reversal / flyback handling ---
+        block_passed_gate: bool = True,
+        block_all_gates: bool = True,
+        reversal_cone_deg: float = 30.0,
+        forward_cone_deg: float = 30.0,
+        forward_cone_length: float = 1.0,
+        block_opening_half: float = 0.22,
+        block_depth: float = 0.25,
+        # --- Obstacle side-commitment (anti late-flip) ---
+        # When the drone approaches an obstacle fast, lock the side it is already
+        # passing on so a late sensor reveal can't flip the path to the other side
+        # (a lateral jump the tracker can't follow). A wall is blocked on the
+        # *wrong* side of imminent obstacles; if that makes the segment infeasible
+        # the block is dropped (the flip was genuinely necessary).
+        commit_obstacles: bool = True,
+        commit_distance: float = 1.0,
+        commit_min_speed: float = 0.8,
+        commit_lateral_band: float = 0.5,
+        commit_wall_extent: float = 0.5,
+        commit_wall_thickness: float = 0.12,
+        commit_z_half: float = 0.85,
     ):
         self.gate_passing_generator = (
-            GatePassingPathGenerator(max_nudge=0.0)
+            GatePassingPathGenerator()
             if gate_passing_generator is None
             else gate_passing_generator
         )
@@ -127,52 +115,30 @@ class AStarImprovedPathGenerator:
         self.safety_margin = safety_margin
         self.obstacle_radius = obstacle_radius
         self.heuristic_weight = heuristic_weight
-        self.max_astar_iterations = max_astar_iterations
         self.endpoint_snap_distance = endpoint_snap_distance
         self.prune_path = prune_path
         self.final_extension_distance = final_extension_distance
-        self.velocity_bias_weight = velocity_bias_weight
-        self.velocity_bias_decay = velocity_bias_decay
-        self.min_velocity_for_bias = min_velocity_for_bias
 
-        self.use_search_window = use_search_window
-        self.window_margin = window_margin
-        self.use_coarse_to_fine = use_coarse_to_fine
-        self.coarse_factor = max(1, int(coarse_factor))
-        self.corridor_radius = corridor_radius
+        self.block_passed_gate = block_passed_gate
+        self.block_all_gates = block_all_gates
+        self.reversal_cone_deg = reversal_cone_deg
+        self.forward_cone_deg = forward_cone_deg
+        self.forward_cone_length = forward_cone_length
+        self.block_opening_half = block_opening_half
+        self.block_depth = block_depth
 
-        self.use_clearance_cost = use_clearance_cost
-        self.clearance_weight = clearance_weight
-        self.clearance_dist = clearance_dist
-        self.clearance_exponent = clearance_exponent
+        self.commit_obstacles = commit_obstacles
+        self.commit_distance = commit_distance
+        self.commit_min_speed = commit_min_speed
+        self.commit_lateral_band = commit_lateral_band
+        self.commit_wall_extent = commit_wall_extent
+        self.commit_wall_thickness = commit_wall_thickness
+        self.commit_z_half = commit_z_half
 
-        self.use_momentum_compare = use_momentum_compare
-        self.momentum_min_speed = momentum_min_speed
-        self.momentum_lookahead_time = momentum_lookahead_time
-        self.momentum_min_dist = momentum_min_dist
-        self.momentum_max_dist = momentum_max_dist
-        self.speed_estimate = speed_estimate
-        self.turn_penalty = turn_penalty
-        self.initial_turn_penalty = initial_turn_penalty
-
-
-        # Persistent solvers so the A* scratch buffers are reused across replans.
-        # Separate instances for fine / coarse grids to avoid buffer-size thrash.
-        self.use_barebone = use_barebone
-        if use_barebone:
-            self._fine_solver = _BareboneSolverAdapter()
-            self._coarse_solver = _BareboneSolverAdapter()
-        else:
-            self._fine_solver = AStar3DImproved()
-            self._coarse_solver = AStar3DImproved()
-
-        # Per-generate clearance cost field (built in generate, used by the fine
-        # solver). None when clearance shaping is disabled.
-        self._cost_field = None
+        self._solver = AStar3DBarebone()
 
     def generate(self, obs, config=None):
         mandatory = self.gate_passing_generator.generate(obs, config)
-        current_velocity = np.asarray(obs.get("vel", np.zeros(3)), dtype=float)
 
         grid = OccupancyGrid3D(
             obs=obs,
@@ -181,53 +147,40 @@ class AStarImprovedPathGenerator:
             safety_margin=self.safety_margin,
             obstacle_radius=self.obstacle_radius,
         )
-        self._cost_field = self._build_cost_field(grid)
 
-        coarse_grid = None
-        if self.use_coarse_to_fine and self.coarse_factor > 1:
-            coarse_grid = OccupancyGrid3D(
-                obs=obs,
-                config=config,
-                resolution=self.grid_resolution * self.coarse_factor,
-                safety_margin=self.safety_margin,
-                obstacle_radius=self.obstacle_radius,
-            )
-
+        target_gate = int(np.asarray(obs.get("target_gate", 0)).item())
         final_path = [mandatory[0]]
-        locked = [0]  # indices of gate anchors (entry/center/exit) + start/end
-
         num_gates = (len(mandatory) - 1) // 3
         current = mandatory[0]
 
         for gate_i in range(num_gates):
             base = 1 + 3 * gate_i
-
             entry = mandatory[base + 0]
             center = mandatory[base + 1]
             exit_ = mandatory[base + 2]
 
-            segment_velocity = current_velocity if gate_i == 0 else None
-            astar_segment = self._plan_segment(grid, coarse_grid, current, entry, segment_velocity)
-            astar_segment = self._maybe_prune_segment(astar_segment, grid)
+            # The gate left behind on this segment (target_gate - 1 on the first
+            # segment = the physical gate just crossed; the previous remaining gate
+            # thereafter). The reversal/flyback check is applied to it per-segment.
+            # With block_all_gates off, only the first segment is checked (the old
+            # behaviour) -- per-gate blocking changes later segments and, via the
+            # shared spline, can perturb the RL tracker through an earlier gate.
+            left_gate_idx = target_gate + gate_i - 1
+            if not self.block_all_gates and gate_i > 0:
+                left_gate_idx = -1  # disable: only the just-passed gate is checked
+            astar_segment = self._plan_segment(
+                grid, current, entry, obs, left_gate_idx, is_approach=(gate_i == 0)
+            )
 
             if len(astar_segment) > 1:
                 final_path.extend(astar_segment[1:])
-                locked.append(len(final_path) - 1)  # gate entry: lock approach
 
-            # Keep gate crossing direct and ordered, and locked during refinement.
             final_path.append(center)
-            locked.append(len(final_path) - 1)
             final_path.append(exit_)
-            locked.append(len(final_path) - 1)
-
             current = exit_
-
-        # Final extension after the last remaining gate.
-        target_gate = int(np.asarray(obs.get("target_gate", 0)).item())
 
         gates_pos_all = np.asarray(obs["gates_pos"], dtype=float)
         gates_quat_all = np.asarray(obs["gates_quat"], dtype=float)
-
         remaining_gates_pos = gates_pos_all[target_gate:]
         remaining_gates_quat = gates_quat_all[target_gate:]
 
@@ -242,346 +195,216 @@ class AStarImprovedPathGenerator:
             finish = last_gate_pos + self.final_extension_distance * forward
             finish = self.gate_passing_generator._clip_z(finish)
 
-            final_segment_velocity = current_velocity if num_gates == 0 else None
+            finish_left_idx = target_gate + num_gates - 1
+            if not self.block_all_gates and num_gates > 0:
+                finish_left_idx = -1  # only the just-passed gate is checked
             astar_segment = self._plan_segment(
-                grid, coarse_grid, current, finish, final_segment_velocity
+                grid, current, finish, obs, finish_left_idx, is_approach=(num_gates == 0)
             )
-            astar_segment = self._maybe_prune_segment(astar_segment, grid)
-
             if len(astar_segment) > 1:
                 final_path.extend(astar_segment[1:])
 
-            current = finish
+        return np.asarray(final_path, dtype=float)
 
-        path = np.asarray(final_path, dtype=float)
+    def _plan_segment(self, grid, current, goal, obs, left_gate_idx, is_approach=False):
+        """Plan ``current -> goal`` with any temporary, segment-local blocks.
 
-        return path
-
-    def _plan_segment(self, grid, coarse_grid, current, goal, velocity):
-        """Plan one segment, using the momentum-aware compare when applicable."""
-        if (
-            self.use_momentum_compare
-            and velocity is not None
-            and np.linalg.norm(velocity) >= self.momentum_min_speed
-        ):
-            return self._two_candidate_segment(grid, coarse_grid, current, goal, velocity)
-        return self.plan_astar(grid, coarse_grid, current, goal, preferred_velocity=velocity)
-
-    def _two_candidate_segment(self, grid, coarse_grid, current, goal, velocity):
-        """Return the faster of the shortest path and a forward-committed path."""
-        cand_shortest = self.plan_astar(grid, coarse_grid, current, goal, preferred_velocity=None)
-        cand_forward = self._plan_forward_committed(grid, coarse_grid, current, goal, velocity)
-
-        if cand_forward is None or len(cand_forward) < 2:
-            print("Momentum compare: forward commit infeasible, falling back to shortest path")
-            print(cand_forward)
-            return cand_shortest
-
-        t_short = self._estimate_time(cand_shortest, velocity)
-        t_forward = self._estimate_time(cand_forward, velocity)
-        return cand_forward if t_forward < t_short else cand_shortest
-
-    def _plan_forward_committed(self, grid, coarse_grid, current, goal, velocity):
-        """Plan via a look-ahead waypoint along the current velocity.
-
-        Returns None when the forward commitment is infeasible (look-ahead point
-        blocked, or the straight departure is not collision-free) so the caller
-        falls back to the shortest path -- i.e. reverse only when necessary.
+        Two block sources, applied to a scratch copy of the grid (restored after):
+          * gate reversal/flyback -- block the just-left gate's opening so A* turns
+            around it rather than diving back through (see ``_should_block``);
+          * obstacle side-commitment (only on the approach segment) -- block a wall
+            on the *wrong* side of imminent obstacles so a late sensor reveal can't
+            flip the pass side under the drone (see ``_commit_blocks``).
+        If the blocks make the segment infeasible (A* falls back to a colliding
+        straight line) they are dropped and the segment is replanned unblocked --
+        i.e. only commit/block when there is genuinely room to.
         """
+        blocks = self._gate_blocks(obs, current, goal, left_gate_idx)
+        if is_approach:
+            blocks += self._commit_blocks(obs, current)
+        if not blocks:
+            seg = self.plan_astar(grid, current, goal)
+            return self._maybe_prune_segment(seg, grid)
+
+        saved = grid.occupied
+        grid.occupied = saved.copy()
+        try:
+            for center, quat, half in blocks:
+                grid.block_oriented_box(center, quat, half)
+            seg = self.plan_astar(grid, current, goal)
+            seg = self._maybe_prune_segment(seg, grid)
+        finally:
+            grid.occupied = saved
+
+        # Blocking made it infeasible -> the constraint was wrong, plan unblocked.
+        if len(seg) <= 2 and not self._line_is_free(seg[0], seg[-1], grid):
+            seg = self.plan_astar(grid, current, goal)
+            seg = self._maybe_prune_segment(seg, grid)
+        return seg
+
+    def _gate_blocks(self, obs, current, goal, left_gate_idx):
+        """Reversal/flyback block as a ``[(center, quat, half_extents)]`` list."""
+        block = self._should_block(obs, current, goal, left_gate_idx)
+        if block is None:
+            return []
+        center, quat, exit_dir = block
+        half_depth = self.block_depth / 2.0
+        return [(
+            center - exit_dir * half_depth,
+            quat,
+            np.array([half_depth, self.block_opening_half, self.block_opening_half]),
+        )]
+
+    def _commit_blocks(self, obs, current):
+        """Wall-block the wrong side of imminent obstacles to lock the pass side.
+
+        Returns ``[(center, quat, half_extents)]`` for each obstacle that is ahead,
+        within ``commit_distance``, roughly in the drone's path, and approached
+        fast enough to matter. The committed side is the side the drone is already
+        on (from its current lateral offset); the wall sits just past the obstacle
+        on the opposite side, aligned with the travel direction.
+        """
+        if not self.commit_obstacles:
+            return []
+        vel = np.asarray(obs.get("vel", np.zeros(3)), dtype=float)[:2]
+        speed = float(np.linalg.norm(vel))
+        if speed < self.commit_min_speed:
+            return []
+        obstacles = np.asarray(obs.get("obstacles_pos", np.empty((0, 3))), dtype=float)
+        if obstacles.size == 0:
+            return []
+
+        pos = np.asarray(current, dtype=float)
+        u = vel / speed  # travel direction (xy)
+        w = np.array([-u[1], u[0]])  # left normal
+
+        blocks = []
+        for o in obstacles:
+            rel = o[:2] - pos[:2]
+            along = float(rel @ u)
+            lat = float(rel @ w)  # >0: obstacle to the drone's left
+            if along <= 0.0 or along > self.commit_distance:
+                continue  # behind, or too far to be imminent
+            if abs(lat) > self.commit_lateral_band or abs(lat) < 1e-3:
+                continue  # well off to the side, or dead-centre (no committed side)
+
+            wrong_dir = np.sign(lat) * w  # block the side the obstacle is on
+            center_xy = o[:2] + wrong_dir * (self.obstacle_radius + self.commit_wall_extent / 2.0)
+            center = np.array([center_xy[0], center_xy[1], self.commit_z_half])
+            # Box axes: local x = travel (u), local y = left normal (w), z = up. Use
+            # the fixed right-handed frame [u, w, z] (the box is symmetric in y, so
+            # the center offset alone puts the wall on the wrong side).
+            mat = np.array([[u[0], w[0], 0.0], [u[1], w[1], 0.0], [0.0, 0.0, 1.0]])
+            quat = R.from_matrix(mat).as_quat()
+            half = np.array([
+                self.commit_wall_thickness / 2.0,
+                self.commit_wall_extent / 2.0,
+                self.commit_z_half,
+            ])
+            blocks.append((center, quat, half))
+        return blocks
+
+    def _should_block(self, obs, current, goal, left_gate_idx):
+        """Reversal/flyback decision for the gate left behind on a segment.
+
+        Returns ``(center, quat, exit_dir)`` of the gate whose opening to block, or
+        ``None`` to plan normally. Two checks on gate ``left_gate_idx``:
+          1. forward runway clear -- a cone along the exit direction is obstacle
+             free (the drone could keep flying forward); and
+          2. next gate behind -- ``goal`` lies within ``reversal_cone_deg`` of
+             straight behind the gate (a genuine reversal).
+        A runway-clear reversal plans normally (A* may loop forward on its own);
+        otherwise the opening is blocked. A clean forward fly-through is unaffected
+        either way (its forward path never revisits the gate's entry-side opening).
+        """
+        if not self.block_passed_gate or left_gate_idx < 0:
+            return None
+
+        gates_pos = np.asarray(obs["gates_pos"], dtype=float)
+        gates_quat = np.asarray(obs["gates_quat"], dtype=float)
+        if left_gate_idx >= len(gates_pos):
+            return None
+
+        center = gates_pos[left_gate_idx]
+        quat = gates_quat[left_gate_idx]
         current = np.asarray(current, dtype=float)
-        speed = float(np.linalg.norm(velocity))
-        if speed < 1e-9:
+        goal = np.asarray(goal, dtype=float)
+
+        # Exit direction: gate normal, signed toward where the drone now is.
+        forward = R.from_quat(quat).apply(np.array([1.0, 0.0, 0.0]))
+        sign = np.sign(np.dot(forward, current - center))
+        exit_dir = forward * (sign if sign != 0 else 1.0)
+        norm = np.linalg.norm(exit_dir)
+        if norm < 1e-9:
             return None
+        exit_dir = exit_dir / norm
 
-        v_unit = np.asarray(velocity, dtype=float) / speed
-        look = float(
-            np.clip(
-                speed * self.momentum_lookahead_time,
-                self.momentum_min_dist,
-                self.momentum_max_dist,
-            )
-        )
-        momentum = self.gate_passing_generator._clip_z(current + look * v_unit)
-        momentum = np.clip(momentum, grid.bounds_low, grid.bounds_high)
+        forward_clear = self._forward_cone_free(current, exit_dir, obs["obstacles_pos"])
 
-        # The forward departure must be clear of obstacle POLES (real hazards).
-        # Gate frames are deliberately ignored: just after passing a gate the
-        # drone sits inside that gate's inflated frame, so a full-occupancy check
-        # would falsely reject the forward commit exactly when it is needed. A
-        # pole genuinely ahead still rejects it -> fall back to the shortest
-        # (possibly reversing) path, i.e. reverse only when necessary.
-        if not self._segment_pole_clear(current, momentum, grid):
+        to_next = goal - center
+        n = np.linalg.norm(to_next)
+        if n < 1e-9:
             return None
+        cos_behind = float(np.dot(to_next / n, -exit_dir))
+        is_reversal = cos_behind >= np.cos(np.radians(self.reversal_cone_deg))
 
-        # plan_astar snaps the (possibly gate-frame) momentum point internally.
-        onward = self.plan_astar(grid, coarse_grid, momentum, goal, preferred_velocity=velocity)
-        return np.vstack([current[None, :], np.asarray(onward, dtype=float)])
+        if forward_clear and is_reversal:
+            return None  # genuine flyback with a clear runway: plan normally
+        return center, quat, exit_dir
 
-    def _segment_pole_clear(self, a, b, grid, margin=0.0):
-        """True if the segment a->b stays clear of every obstacle pole (XY).
-
-        Pole-only by design (ignores gate frames); see _plan_forward_committed.
-        """
-        obstacles = np.asarray(grid.obstacles_pos, dtype=float)
+    def _forward_cone_free(self, apex, direction, obstacles):
+        """True if no obstacle lies in the forward cone from ``apex``."""
+        obstacles = np.asarray(obstacles, dtype=float)
         if obstacles.size == 0:
             return True
 
-        a = np.asarray(a, dtype=float)
-        b = np.asarray(b, dtype=float)
-        dist = float(np.linalg.norm(b - a))
-        n = max(2, int(np.ceil(dist / max(grid.resolution, 1e-6))))
-        ts = np.linspace(0.0, 1.0, n)
-        pts = a[None, :] * (1.0 - ts)[:, None] + b[None, :] * ts[:, None]  # (n, 3)
+        apex = np.asarray(apex, dtype=float)
+        v = obstacles - apex
+        along = v @ direction
+        dist = np.linalg.norm(v, axis=1)
+        cos_ang = np.where(dist > 1e-9, along / np.maximum(dist, 1e-9), 1.0)
+        cos_thr = np.cos(np.radians(self.forward_cone_deg))
+        in_cone = (along > 0.0) & (along <= self.forward_cone_length) & (cos_ang >= cos_thr)
+        return not bool(np.any(in_cone))
 
-        d_xy = np.linalg.norm(pts[:, None, :2] - obstacles[None, :, :2], axis=2)  # (n, P)
-        return bool(np.all(d_xy.min(axis=1) > self.obstacle_radius + margin))
-
-    def _estimate_time(self, path, velocity):
-        """Cheap traversal-time proxy: length term plus turn/deceleration penalties.
-
-        The initial-turn term (deviation of the first move from the current
-        velocity) is the key discriminator: a reversal incurs a large penalty.
-        """
-        path = np.asarray(path, dtype=float)
-        if len(path) < 2:
-            return 0.0
-
-        segs = np.diff(path, axis=0)
-        seg_len = np.linalg.norm(segs, axis=1)
-        t = float(np.sum(seg_len)) / max(self.speed_estimate, 1e-6)
-
-        dirs = segs / np.maximum(seg_len, 1e-9)[:, None]
-
-        # Interior turns.
-        if len(dirs) >= 2:
-            cos_int = np.clip(np.sum(dirs[:-1] * dirs[1:], axis=1), -1.0, 1.0)
-            t += self.turn_penalty * float(np.sum(1.0 - cos_int))
-
-        # Initial deviation from the current velocity. Scaled by speed: the
-        # faster you are going, the more momentum a turn/reversal must shed, so
-        # the costlier it is in time. This is the dominant discriminator.
-        speed = float(np.linalg.norm(velocity))
-        if speed > 1e-9 and seg_len[0] > 1e-9:
-            cos0 = float(np.clip(np.dot(np.asarray(velocity, dtype=float) / speed, dirs[0]), -1.0, 1.0))
-            t += self.initial_turn_penalty * speed * (1.0 - cos0)
-
-        return t
-
-    def plan_astar(self, grid, coarse_grid, start, goal, preferred_velocity=None):
+    def plan_astar(self, grid, start, goal):
         start_idx = grid.world_to_grid(start)
         goal_idx = grid.world_to_grid(goal)
 
         snapped_start_idx = grid.nearest_free_idx(
             start_idx, max_distance=self.endpoint_snap_distance
         )
-        snapped_goal_idx = grid.nearest_free_idx(goal_idx, max_distance=self.endpoint_snap_distance)
+        snapped_goal_idx = grid.nearest_free_idx(
+            goal_idx, max_distance=self.endpoint_snap_distance
+        )
 
         if snapped_start_idx is None:
-            print(f"A*(improved): no free start cell near {start_idx}, world={start}")
+            print(f"A*(barebone): no free start cell near {start_idx}, world={start}")
             return np.vstack([start, goal])
 
         if snapped_goal_idx is None:
-            print(f"A*(improved): no free goal cell near {goal_idx}, world={goal}")
+            print(f"A*(barebone): no free goal cell near {goal_idx}, world={goal}")
             return np.vstack([start, goal])
 
-        win_min, win_max = self._segment_window(grid, snapped_start_idx, snapped_goal_idx)
-
-        allowed_mask = None
-        if coarse_grid is not None:
-            allowed_mask = self._coarse_corridor(
-                coarse_grid,
-                grid,
-                start,
-                goal,
-                snapped_start_idx,
-                snapped_goal_idx,
-                preferred_velocity,
-            )
-
-        idx_path = self._run_astar(
-            grid, snapped_start_idx, snapped_goal_idx, win_min, win_max, allowed_mask,
-            preferred_velocity,
+        idx_path = self._solver.plan(
+            grid.occupied,
+            snapped_start_idx,
+            snapped_goal_idx,
+            heuristic_weight=self.heuristic_weight,
         )
-
-        # If the corridor was too tight, retry once on the full window.
-        if idx_path is None and allowed_mask is not None:
-            print("A*(improved): corridor search failed, retrying on full window")
-            idx_path = self._run_astar(
-                grid, snapped_start_idx, snapped_goal_idx, win_min, win_max, None,
-                preferred_velocity,
-            )
-
         if idx_path is None:
             print(
-                "WARNING: A*(improved) failed; falling back to straight segment:",
-                "start=", start, "goal=", goal,
+                "WARNING: A*(barebone) failed; falling back to straight segment:",
+                "start=", start,
+                "goal=", goal,
             )
             return np.vstack([start, goal])
 
         return np.asarray([grid.grid_to_world(idx) for idx in idx_path], dtype=float)
 
-    def _run_astar(self, grid, start_idx, goal_idx, win_min, win_max, allowed_mask, preferred_velocity):
-        return self._fine_solver.plan(
-            grid,
-            start_idx,
-            goal_idx,
-            win_min=win_min,
-            win_max=win_max,
-            allowed_mask=allowed_mask,
-            cost_field=self._cost_field,
-            max_iterations=self.max_astar_iterations,
-            heuristic_weight=self.heuristic_weight,
-            preferred_direction=preferred_velocity,
-            direction_bias_weight=self.velocity_bias_weight,
-            direction_bias_decay=self.velocity_bias_decay,
-            min_direction_speed=self.min_velocity_for_bias,
-        )
-
-    def _build_cost_field(self, grid):
-        """Pole-clearance extra cost rate per cell, or None if disabled.
-
-        Analytic XY distance to the nearest obstacle pole (poles are vertical),
-        minus the pole inflation radius. The cost ramps from 0 at
-        ``clearance_dist`` metres outside the inflated pole up to
-        ``clearance_weight`` at its surface. Built once per grid (cheap, no 3D
-        distance transform) and shared across all segments. Gate frames are not
-        penalized; they are handled by the hard occupancy only.
-        """
-        if not self.use_clearance_cost or self.clearance_weight <= 0.0:
-            return None
-
-        obstacles = np.asarray(grid.obstacles_pos, dtype=float)
-        if obstacles.size == 0:
-            return None
-
-        sx_dim, sy_dim, sz_dim = (int(v) for v in grid.shape.tolist())
-        xs = grid.bounds_low[0] + np.arange(sx_dim) * grid.resolution
-        ys = grid.bounds_low[1] + np.arange(sy_dim) * grid.resolution
-
-        # Min XY distance from each (x, y) column to any pole center.
-        dx = xs[:, None, None] - obstacles[None, None, :, 0]  # (Sx, 1, P)
-        dy = ys[None, :, None] - obstacles[None, None, :, 1]  # (1, Sy, P)
-        clearance_xy = np.sqrt(dx * dx + dy * dy).min(axis=2)  # (Sx, Sy)
-
-        # Distance outside the inflated pole, then ramp to a cost.
-        clearance = np.maximum(clearance_xy - self.obstacle_radius, 0.0)
-        d = max(self.clearance_dist, 1e-6)
-        ramp = np.clip((d - clearance) / d, 0.0, 1.0) ** self.clearance_exponent
-        field_2d = self.clearance_weight * ramp  # (Sx, Sy)
-
-        # Broadcast over z into a contiguous (Sx, Sy, Sz) field.
-        field = np.empty((sx_dim, sy_dim, sz_dim), dtype=float)
-        field[:] = field_2d[:, :, None]
-        return field
-
-    def _segment_window(self, grid, start_idx, goal_idx):
-        """Inclusive index box around start/goal, expanded by ``window_margin``."""
-        shape = tuple(int(v) for v in grid.shape.tolist())
-        if not self.use_search_window:
-            return (0, 0, 0), (shape[0] - 1, shape[1] - 1, shape[2] - 1)
-
-        margin = int(np.ceil(self.window_margin / grid.resolution))
-        lo, hi = [], []
-        for d in range(3):
-            a = min(start_idx[d], goal_idx[d]) - margin
-            b = max(start_idx[d], goal_idx[d]) + margin
-            lo.append(int(max(0, a)))
-            hi.append(int(min(shape[d] - 1, b)))
-        return tuple(lo), tuple(hi)
-
-    def _coarse_corridor(
-        self,
-        coarse_grid,
-        fine_grid,
-        start,
-        goal,
-        fine_start_idx,
-        fine_goal_idx,
-        preferred_velocity,
-    ):
-        """Plan coarsely and build a full-grid corridor mask for the fine pass.
-
-        Returns the boolean mask (shape equal to the fine grid), or ``None`` if
-        no usable corridor was found (in which case the caller searches the full
-        window unrestricted).
-        """
-        c_start = coarse_grid.nearest_free_idx(
-            coarse_grid.world_to_grid(start), max_distance=self.endpoint_snap_distance
-        )
-        c_goal = coarse_grid.nearest_free_idx(
-            coarse_grid.world_to_grid(goal), max_distance=self.endpoint_snap_distance
-        )
-        if c_start is None or c_goal is None:
-            return None
-
-        coarse_idx_path = self._coarse_solver.plan(
-            coarse_grid,
-            c_start,
-            c_goal,
-            max_iterations=self.max_astar_iterations,
-            heuristic_weight=self.heuristic_weight,
-            preferred_direction=preferred_velocity,
-            direction_bias_weight=self.velocity_bias_weight,
-            direction_bias_decay=self.velocity_bias_decay,
-            min_direction_speed=self.min_velocity_for_bias,
-        )
-        if not coarse_idx_path:
-            return None
-
-        coarse_world = np.asarray(
-            [coarse_grid.grid_to_world(i) for i in coarse_idx_path], dtype=float
-        )
-        dense_world = self._densify(coarse_world, step=fine_grid.resolution)
-
-        mask = np.zeros(tuple(int(v) for v in fine_grid.shape.tolist()), dtype=bool)
-        r = int(np.ceil(self.corridor_radius / fine_grid.resolution))
-
-        # Inflate the coarse centerline into the fine grid.
-        for w in dense_world:
-            self._mark_ball(mask, fine_grid.world_to_grid(w), r)
-
-        # Always keep the snapped fine endpoints reachable.
-        self._mark_ball(mask, fine_start_idx, r)
-        self._mark_ball(mask, fine_goal_idx, r)
-
-        if not mask.any():
-            return None
-        return mask
-
-    @staticmethod
-    def _mark_ball(mask, center_idx, r):
-        """Mark an axis-aligned cube of half-size ``r`` around a grid cell."""
-        wnx, wny, wnz = mask.shape
-        cx, cy, cz = center_idx
-        x0, x1 = max(0, cx - r), min(wnx - 1, cx + r)
-        y0, y1 = max(0, cy - r), min(wny - 1, cy + r)
-        z0, z1 = max(0, cz - r), min(wnz - 1, cz + r)
-        if x0 <= x1 and y0 <= y1 and z0 <= z1:
-            mask[x0 : x1 + 1, y0 : y1 + 1, z0 : z1 + 1] = True
-
-    @staticmethod
-    def _densify(points, step):
-        """Resample a polyline so consecutive samples are <= ``step`` apart."""
-        points = np.asarray(points, dtype=float)
-        if len(points) < 2:
-            return points
-
-        out = [points[0]]
-        step = max(float(step), 1e-9)
-        for i in range(1, len(points)):
-            a, b = points[i - 1], points[i]
-            dist = float(np.linalg.norm(b - a))
-            n = max(1, int(np.ceil(dist / step)))
-            for k in range(1, n + 1):
-                out.append(a + (b - a) * (k / n))
-        return np.asarray(out, dtype=float)
-
-    # --- Pruning helpers (copied verbatim from AStarGatePathGenerator) ---
-
     def _maybe_prune_segment(self, path, grid):
         if not self.prune_path:
             return path
-
         return self._prune_path(path, grid)
 
     def _prune_path(self, path, grid):
@@ -593,12 +416,10 @@ class AStarImprovedPathGenerator:
 
         while i < len(path) - 1:
             j = len(path) - 1
-
             while j > i + 1:
                 if self._line_is_free(path[i], path[j], grid):
                     break
                 j -= 1
-
             pruned.append(path[j])
             i = j
 
@@ -616,10 +437,8 @@ class AStarImprovedPathGenerator:
             return grid.is_free(grid.world_to_grid(a))
 
         n = max(2, int(np.ceil(dist / step)))
-
         for alpha in np.linspace(0.0, 1.0, n):
             p = (1.0 - alpha) * a + alpha * b
             if not grid.is_free(grid.world_to_grid(p)):
                 return False
-
         return True

@@ -16,10 +16,10 @@ goes from *when* the drone is there:
 
 The public surface (``_pos``, ``_vel``, ``_yaw``, ``_time_grid``,
 ``sample_horizon``) matches the legacy ``SplineTrajectory`` so it is a drop-in
-replacement; extra signals (``_acc``, ``_yaw_rate``, ``_s_grid``) and the raw
-maps (``path``, ``s_of_t``) are exposed for planning/diagnostics.
+replacement.
 
-The legacy ``SplineTrajectory`` is kept below unchanged for comparison.
+The legacy ``SplineTrajectory`` is kept below unchanged for comparison (it is
+still used by the challenge RL / exploratory controllers).
 """
 
 from __future__ import annotations
@@ -149,17 +149,13 @@ class ImprovedSplineTrajectory:
             point = getattr(self, "_point", np.zeros(3))
             self._pos = np.tile(point, (n, 1))
             self._vel = np.zeros((n, 3))
-            self._acc = np.zeros((n, 3))
-            self._s_grid = np.zeros(n)
             self._yaw = np.zeros(n)
-            self._yaw_rate = np.zeros(n)
             return
 
         s_t = np.clip(self._s_of_t(self._time_grid), 0.0, self._path_length)
         u_t = self._u_of_s(s_t)
 
         self._pos = self._geom(u_t)
-        self._s_grid = s_t
 
         # Unit tangent from the geometry; scheduled speed from the timing map.
         dp_du = self._geom_d(u_t)
@@ -167,10 +163,8 @@ class ImprovedSplineTrajectory:
         tangent = dp_du / np.maximum(speed_u[:, None], 1e-9)
         s_dot = self._s_dot_of_t(self._time_grid)
         self._vel = tangent * s_dot[:, None]
-        self._acc = np.gradient(self._vel, self._time_grid, axis=0)
 
         self._yaw = self._compute_yaw(tangent, s_dot)
-        self._yaw_rate = np.gradient(np.unwrap(self._yaw), self._time_grid)
 
     def _compute_yaw(
         self, tangent: NDArray[np.floating], s_dot: NDArray[np.floating]
@@ -214,20 +208,6 @@ class ImprovedSplineTrajectory:
         return yaw
 
     # --------------------------------------------------------------- public API
-    def path(self, s: NDArray[np.floating] | float) -> NDArray[np.floating]:
-        """Evaluate the geometric path p(s) at arc length(s) ``s``."""
-        if self._geom is None:
-            point = getattr(self, "_point", np.zeros(3))
-            return np.broadcast_to(point, np.shape(s) + (3,)) if np.ndim(s) else point
-        s = np.clip(np.asarray(s, dtype=float), 0.0, self._path_length)
-        return self._geom(self._u_of_s(s))
-
-    def s_of_t(self, t: NDArray[np.floating] | float) -> NDArray[np.floating] | float:
-        """Evaluate the timing map s(t) (arc length reached at time ``t``)."""
-        if self._s_of_t is None:
-            return np.zeros_like(t) if np.ndim(t) else 0.0
-        return np.clip(self._s_of_t(t), 0.0, self._path_length)
-
     def sample_horizon(self, tick: int, N: int) -> dict:
         """Return the next ``N`` setpoints starting at ``tick`` (+ the terminal)."""
         i = min(tick, len(self._pos) - 1 - N)

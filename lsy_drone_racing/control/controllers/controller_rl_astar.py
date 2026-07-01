@@ -37,7 +37,6 @@ from lsy_drone_racing.control.train_rl import Agent
 
 ## Modular imports
 from lsy_drone_racing.control.controllers.modules.path_generator_improved import AStarImprovedPathGenerator
-from lsy_drone_racing.control.controllers.modules.path_generator_barebone import AStarBarebonePathGenerator
 from lsy_drone_racing.control.controllers.modules.initial_challenge.timing_module import DistanceTiming
 from lsy_drone_racing.control.controllers.modules.timing_module_improved import DynamicTiming
 from lsy_drone_racing.control.controllers.modules.initial_challenge.trajectory_module import SplineTrajectory
@@ -67,7 +66,7 @@ class AttitudeMPC(Controller):
         # modules
         # self.path_gen = AStarGatePathGenerator()
         # self.path_gen = WaypointPathGenerator()
-        self.path_gen = AStarBarebonePathGenerator(
+        self.path_gen = AStarImprovedPathGenerator(
             grid_resolution=0.05,
             safety_margin=0.05,
             obstacle_radius=0.215,

@@ -37,11 +37,10 @@ from scipy.spatial.transform import Rotation as R
 from lsy_drone_racing.control import Controller
 
 ## Modular imports -- same planning pipeline as controller_rl_astar
-from lsy_drone_racing.control.controllers.modules.path_generator_barebone import AStarBarebonePathGenerator
+from lsy_drone_racing.control.controllers.modules.path_generator_improved import AStarImprovedPathGenerator
 from lsy_drone_racing.control.controllers.modules.post_processing import PathPostProcessor
 from lsy_drone_racing.control.controllers.modules.timing_module_improved import DynamicTiming
 from lsy_drone_racing.control.controllers.modules.trajectory_module_improved import ImprovedSplineTrajectory
-from lsy_drone_racing.control.controllers.modules.initial_challenge.trajectory_module import SplineTrajectory
 
 ## Debug stuff
 from pathlib import Path
@@ -241,7 +240,7 @@ class AttitudeMPC(Controller):
 
         # modules -- same planning pipeline as controller_rl_astar (only the
         # downstream tracker differs: acados MPC here vs the RL agent there).
-        self.path_gen = AStarBarebonePathGenerator(
+        self.path_gen = AStarImprovedPathGenerator(
             grid_resolution=0.05,
             safety_margin=0.05,
             obstacle_radius=0.18,

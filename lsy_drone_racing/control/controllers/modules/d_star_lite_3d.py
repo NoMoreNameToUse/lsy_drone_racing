@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from lsy_drone_racing.control.controllers.modules.zihan.astar_3d import NEIGHBOR_STEPS_18, heuristic
+from lsy_drone_racing.control.controllers.modules.initial_challenge.astar_3d import NEIGHBOR_STEPS_18, heuristic
 
 GridIdx = tuple[int, int, int]
 

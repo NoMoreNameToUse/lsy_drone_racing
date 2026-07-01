@@ -68,7 +68,7 @@ class AttitudeMPC(Controller):
             grid_resolution=0.05,
             safety_margin=0.06,
             obstacle_radius=0.21,
-            prune_path=False,
+            prune_path=True,
             )
         ##self.timing = UniformTiming()
 

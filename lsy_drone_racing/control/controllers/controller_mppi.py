@@ -17,12 +17,12 @@ from drone_models.core import load_params
 from scipy.spatial.transform import Rotation
 
 from lsy_drone_racing.control import Controller
-from lsy_drone_racing.control.controllers.modules.zihan.path_generator import (
+from lsy_drone_racing.control.controllers.modules.path_generator_mppi import (
     GatePassingPathGenerator,
     ThetaStarGatePathGenerator,
 )
-from lsy_drone_racing.control.controllers.modules.zihan.timing_module import MotionAwareTiming
-from lsy_drone_racing.control.controllers.modules.zihan.trajectory_module import SplineTrajectory
+from lsy_drone_racing.control.controllers.modules.timing_module_mppi import MotionAwareTiming
+from lsy_drone_racing.control.controllers.modules.initial_challenge.trajectory_module import SplineTrajectory
 
 if TYPE_CHECKING:
     from crazyflow import Sim

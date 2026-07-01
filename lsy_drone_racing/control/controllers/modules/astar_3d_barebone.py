@@ -1,8 +1,11 @@
 """Barebone, JIT-compiled 3D A* — shortest path only.
 
-A minimal, fast grid A* with nothing but the search: no velocity bias, no search
-window, no corridor mask, no cost shaping. The hot loop is compiled with numba
-and uses
+Reason behind a custom A * implementation instead of library: I've tried a few path planning library and they either is slow 
+or missing feature that / internal data I would like to have access to. Hence this implementation.
+Tested to be consistantly less then 10ms which is great for replanning as it will not have a big impact of the 50 Hz refresh rate. 
+
+A minimal, fast grid A* with nothing but the search and uses numba JIT to accelerate numpy calculations. 
+It is designed for repeated replanning on a fixed-shape grid, so it preallocates scratch buffers and neighbor tables.
 
 - flat (1-D) cell indexing with precomputed neighbor offsets,
 - a hand-rolled binary heap on plain arrays (numba has no heapq),
@@ -122,14 +125,8 @@ def _astar_kernel(
 
     return 0
 
-
+### 3D barebone 3D A* solver.
 class AStar3DBarebone:
-    """Reusable barebone 3D A* solver.
-
-    Reuse one instance across replans on a fixed-shape grid so the scratch
-    buffers and neighbor tables are built once.
-    """
-
     def __init__(self):
         self._n = -1
         self._shape = None

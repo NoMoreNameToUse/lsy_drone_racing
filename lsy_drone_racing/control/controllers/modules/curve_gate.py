@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
-from lsy_drone_racing.control.controllers.modules.zihan.path_generator import GatePassingPathGenerator
+from lsy_drone_racing.control.controllers.modules.path_generator_mppi import GatePassingPathGenerator
 
 
 class CurveGatePathGenerator:
