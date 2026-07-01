@@ -36,11 +36,12 @@ from scipy.spatial.transform import Rotation as R
 
 from lsy_drone_racing.control import Controller
 
-## Modular imports
-from lsy_drone_racing.control.controllers.modules.path_generator_improved import AStarImprovedPathGenerator
-from lsy_drone_racing.control.controllers.modules.path_generator_gate_scaffold import GateScaffoldPathGenerator
-from lsy_drone_racing.control.controllers.modules.timing_module import UniformTiming, DistanceTiming
-from lsy_drone_racing.control.controllers.modules.trajectory_module import SplineTrajectory
+## Modular imports -- same planning pipeline as controller_rl_astar
+from lsy_drone_racing.control.controllers.modules.path_generator_barebone import AStarBarebonePathGenerator
+from lsy_drone_racing.control.controllers.modules.post_processing import PathPostProcessor
+from lsy_drone_racing.control.controllers.modules.timing_module_improved import DynamicTiming
+from lsy_drone_racing.control.controllers.modules.trajectory_module_improved import ImprovedSplineTrajectory
+from lsy_drone_racing.control.controllers.modules.initial_challenge.trajectory_module import SplineTrajectory
 
 ## Debug stuff
 from pathlib import Path
@@ -206,33 +207,35 @@ class AttitudeMPC(Controller):
         """
         super().__init__(obs, info, config)
 
-        # modules
-        # self.path_gen = AStarGatePathGenerator()  # original, kept for comparison
-        # Previous backend (kept for comparison):
-        # self.path_gen = AStarImprovedPathGenerator(
-        #     grid_resolution=0.05, safety_margin=0.05, obstacle_radius=0.215,
-        #     prune_path=False, use_search_window=False, use_coarse_to_fine=False,
-        #     use_postprocess=False, use_clearance_cost=False, use_momentum_compare=True)
-        # New P0-P4 gate-passage scaffold (travel-aligned, racing-line apex).
-        self.path_gen = GateScaffoldPathGenerator(
+        # modules -- same planning pipeline as controller_rl_astar (only the
+        # downstream tracker differs: acados MPC here vs the RL agent there).
+        self.path_gen = AStarBarebonePathGenerator(
             grid_resolution=0.05,
             safety_margin=0.05,
-            obstacle_radius=0.215,
-            )
-        ##self.timing = UniformTiming()
-
-        self.timing = DistanceTiming(
-            nominal_speed=0.7,
-            min_segment_time=0.115,
+            obstacle_radius=0.18,
+            prune_path=True,
         )
+
+        # Dynamics-aware timing (curvature/clearance/reversal-shaped, accel-limited).
+        self.timing = DynamicTiming(
+            v_max=3,
+            a_max=2,
+            clearance_ref=0.35,
+            clearance_floor_speed=0.8,
+            reversal_speed=0.3,
+            min_segment_time=0.025,
+        )
+
+        # Densify + per-point clearance tube provider for the timing module.
+        self.post_proc = PathPostProcessor(enabled=True)
 
         # generate once
         waypoints = self.path_gen.generate(obs, config)
+        waypoints, self._clearance = self.post_proc.process(waypoints, obs, config)
         self._raw_waypoints = np.asarray(waypoints, dtype=float)
-        ##t = self.timing.compute(waypoints, t_total=25) # Simpleixed timing with total time
-        t = self.timing.compute(waypoints) 
+        t = self.timing.compute(waypoints, clearance=self._clearance)
 
-        self.trajectory = SplineTrajectory(waypoints, t, config.env.freq)
+        self.trajectory = ImprovedSplineTrajectory(waypoints, t, config.env.freq)
         self._track_gates = np.asarray(obs.get("gates_pos", []), dtype=float)
         self._track_obstacles = np.asarray(obs.get("obstacles_pos", []), dtype=float)
 
@@ -368,12 +371,13 @@ class AttitudeMPC(Controller):
         """Regenerate path and trajectory from the current observation."""
         t0 = time.perf_counter()
         waypoints = self.path_gen.generate(obs, self._config)
+        waypoints, self._clearance = self.post_proc.process(waypoints, obs, self._config)
         t1 = time.perf_counter()
 
         self._raw_waypoints = np.asarray(waypoints, dtype=float)
 
-        t = self.timing.compute(self._raw_waypoints)
-        self.trajectory = SplineTrajectory(self._raw_waypoints, t, self._config.env.freq)
+        t = self.timing.compute(self._raw_waypoints, clearance=self._clearance)
+        self.trajectory = ImprovedSplineTrajectory(self._raw_waypoints, t, self._config.env.freq)
 
         t2 = time.perf_counter()
         print(

@@ -70,7 +70,7 @@ class AttitudeMPC(Controller):
         self.path_gen = AStarBarebonePathGenerator(
             grid_resolution=0.05,
             safety_margin=0.05,
-            obstacle_radius=0.18,
+            obstacle_radius=0.215,
             prune_path=True,
             )
 
@@ -83,12 +83,12 @@ class AttitudeMPC(Controller):
         # 0.8 (== old cruise) so tight spots are never slower than before, only
         # true reversals slow hard.
         self.timing = DynamicTiming(
-            v_max=1.3,
+            v_max=1.5,
             a_max=2.5,
-            clearance_ref=0.30,
+            clearance_ref=0.35,
             clearance_floor_speed=0.8,
-            reversal_speed=0.5,
-            min_segment_time=0.05,
+            reversal_speed=0.3,
+            min_segment_time=0.01,
         )
 
         # Clearance "tube" provider for the upcoming clearance-aware timing module.
@@ -97,7 +97,7 @@ class AttitudeMPC(Controller):
         # waypoint shift (see rl-controller-waypoint-sensitivity). So refinement is
         # disabled here (path unchanged), but process() still returns the tube in
         # self._clearance. Enable the nudge/floor for a more robust tracker (MPC).
-        self.post_proc = PathPostProcessor(enabled=True)
+        self.post_proc = PathPostProcessor(enabled=False)
 
         # generate once
         waypoints = self.path_gen.generate(obs, config)

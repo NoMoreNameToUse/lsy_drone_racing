@@ -38,7 +38,7 @@ from lsy_drone_racing.control.train_rl import Agent
 ## Modular imports
 from lsy_drone_racing.control.controllers.modules.path_generator import AStarGatePathGenerator
 from lsy_drone_racing.control.controllers.modules.timing_module import DistanceTiming
-from lsy_drone_racing.control.controllers.modules.trajectory_module import SplineTrajectory
+from lsy_drone_racing.control.controllers.modules.trajectory_module_improved import SplineTrajectory
 
 
 if TYPE_CHECKING:

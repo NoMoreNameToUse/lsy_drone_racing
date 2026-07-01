@@ -28,7 +28,7 @@ class AStarBarebonePathGenerator:
         heuristic_weight: float = 1.0,
         endpoint_snap_distance: float = 0.30,
         prune_path: bool = False,
-        final_extension_distance: float = 0.60,
+        final_extension_distance: float = 1,
         # --- Reversal / flyback handling ---
         block_passed_gate: bool = True,
         # Apply the check to every gate (True) or only the just-passed gate
@@ -38,12 +38,25 @@ class AStarBarebonePathGenerator:
         # spline + the RL tracker's sensitivity, perturbs an earlier gate crossing.
         # Default off until the tracker/trajectory decouples segments; flip on for
         # a more robust tracker (MPC).
-        block_all_gates: bool = False,
+        block_all_gates: bool = True,
         reversal_cone_deg: float = 30.0,
         forward_cone_deg: float = 30.0,
         forward_cone_length: float = 1.0,
         block_opening_half: float = 0.22,
         block_depth: float = 0.25,
+        # --- Obstacle side-commitment (anti late-flip) ---
+        # When the drone approaches an obstacle fast, lock the side it is already
+        # passing on so a late sensor reveal can't flip the path to the other side
+        # (a lateral jump the tracker can't follow). A wall is blocked on the
+        # *wrong* side of imminent obstacles; if that makes the segment infeasible
+        # the block is dropped (the flip was genuinely necessary).
+        commit_obstacles: bool = True,
+        commit_distance: float = 1.0,
+        commit_min_speed: float = 0.8,
+        commit_lateral_band: float = 0.5,
+        commit_wall_extent: float = 0.5,
+        commit_wall_thickness: float = 0.12,
+        commit_z_half: float = 0.85,
     ):
         self.gate_passing_generator = (
             GatePassingPathGenerator(max_nudge=0.0)
@@ -65,6 +78,14 @@ class AStarBarebonePathGenerator:
         self.forward_cone_length = forward_cone_length
         self.block_opening_half = block_opening_half
         self.block_depth = block_depth
+
+        self.commit_obstacles = commit_obstacles
+        self.commit_distance = commit_distance
+        self.commit_min_speed = commit_min_speed
+        self.commit_lateral_band = commit_lateral_band
+        self.commit_wall_extent = commit_wall_extent
+        self.commit_wall_thickness = commit_wall_thickness
+        self.commit_z_half = commit_z_half
 
         self._solver = AStar3DBarebone()
 
@@ -99,7 +120,9 @@ class AStarBarebonePathGenerator:
             left_gate_idx = target_gate + gate_i - 1
             if not self.block_all_gates and gate_i > 0:
                 left_gate_idx = -1  # disable: only the just-passed gate is checked
-            astar_segment = self._plan_segment(grid, current, entry, obs, left_gate_idx)
+            astar_segment = self._plan_segment(
+                grid, current, entry, obs, left_gate_idx, is_approach=(gate_i == 0)
+            )
 
             if len(astar_segment) > 1:
                 final_path.extend(astar_segment[1:])
@@ -127,43 +150,111 @@ class AStarBarebonePathGenerator:
             finish_left_idx = target_gate + num_gates - 1
             if not self.block_all_gates and num_gates > 0:
                 finish_left_idx = -1  # only the just-passed gate is checked
-            astar_segment = self._plan_segment(grid, current, finish, obs, finish_left_idx)
+            astar_segment = self._plan_segment(
+                grid, current, finish, obs, finish_left_idx, is_approach=(num_gates == 0)
+            )
             if len(astar_segment) > 1:
                 final_path.extend(astar_segment[1:])
 
         return np.asarray(final_path, dtype=float)
 
-    def _plan_segment(self, grid, current, goal, obs, left_gate_idx):
-        """Plan ``current -> goal``, optionally blocking the gate left behind.
+    def _plan_segment(self, grid, current, goal, obs, left_gate_idx, is_approach=False):
+        """Plan ``current -> goal`` with any temporary, segment-local blocks.
 
-        The reversal/flyback check is applied to the gate ``left_gate_idx`` the
-        drone departs on this segment. If it is not a clean forward fly-through nor
-        a runway-clear reversal, that gate's opening is blocked *for this segment
-        only* (the grid is restored afterwards) so A* routes around it rather than
-        diving back through. Blocking only the departed gate -- and only for its
-        own segment -- keeps every gate's approach (and clean fly-throughs) open.
+        Two block sources, applied to a scratch copy of the grid (restored after):
+          * gate reversal/flyback -- block the just-left gate's opening so A* turns
+            around it rather than diving back through (see ``_should_block``);
+          * obstacle side-commitment (only on the approach segment) -- block a wall
+            on the *wrong* side of imminent obstacles so a late sensor reveal can't
+            flip the pass side under the drone (see ``_commit_blocks``).
+        If the blocks make the segment infeasible (A* falls back to a colliding
+        straight line) they are dropped and the segment is replanned unblocked --
+        i.e. only commit/block when there is genuinely room to.
         """
-        block = self._should_block(obs, current, goal, left_gate_idx)
-        if block is None:
+        blocks = self._gate_blocks(obs, current, goal, left_gate_idx)
+        if is_approach:
+            blocks += self._commit_blocks(obs, current)
+        if not blocks:
             seg = self.plan_astar(grid, current, goal)
             return self._maybe_prune_segment(seg, grid)
 
-        center, quat, exit_dir = block
         saved = grid.occupied
         grid.occupied = saved.copy()
         try:
-            half_depth = self.block_depth / 2.0
-            slab_center = center - exit_dir * half_depth
-            grid.block_oriented_box(
-                slab_center,
-                quat,
-                np.array([half_depth, self.block_opening_half, self.block_opening_half]),
-            )
+            for center, quat, half in blocks:
+                grid.block_oriented_box(center, quat, half)
             seg = self.plan_astar(grid, current, goal)
             seg = self._maybe_prune_segment(seg, grid)
         finally:
             grid.occupied = saved
+
+        # Blocking made it infeasible -> the constraint was wrong, plan unblocked.
+        if len(seg) <= 2 and not self._line_is_free(seg[0], seg[-1], grid):
+            seg = self.plan_astar(grid, current, goal)
+            seg = self._maybe_prune_segment(seg, grid)
         return seg
+
+    def _gate_blocks(self, obs, current, goal, left_gate_idx):
+        """Reversal/flyback block as a ``[(center, quat, half_extents)]`` list."""
+        block = self._should_block(obs, current, goal, left_gate_idx)
+        if block is None:
+            return []
+        center, quat, exit_dir = block
+        half_depth = self.block_depth / 2.0
+        return [(
+            center - exit_dir * half_depth,
+            quat,
+            np.array([half_depth, self.block_opening_half, self.block_opening_half]),
+        )]
+
+    def _commit_blocks(self, obs, current):
+        """Wall-block the wrong side of imminent obstacles to lock the pass side.
+
+        Returns ``[(center, quat, half_extents)]`` for each obstacle that is ahead,
+        within ``commit_distance``, roughly in the drone's path, and approached
+        fast enough to matter. The committed side is the side the drone is already
+        on (from its current lateral offset); the wall sits just past the obstacle
+        on the opposite side, aligned with the travel direction.
+        """
+        if not self.commit_obstacles:
+            return []
+        vel = np.asarray(obs.get("vel", np.zeros(3)), dtype=float)[:2]
+        speed = float(np.linalg.norm(vel))
+        if speed < self.commit_min_speed:
+            return []
+        obstacles = np.asarray(obs.get("obstacles_pos", np.empty((0, 3))), dtype=float)
+        if obstacles.size == 0:
+            return []
+
+        pos = np.asarray(current, dtype=float)
+        u = vel / speed  # travel direction (xy)
+        w = np.array([-u[1], u[0]])  # left normal
+
+        blocks = []
+        for o in obstacles:
+            rel = o[:2] - pos[:2]
+            along = float(rel @ u)
+            lat = float(rel @ w)  # >0: obstacle to the drone's left
+            if along <= 0.0 or along > self.commit_distance:
+                continue  # behind, or too far to be imminent
+            if abs(lat) > self.commit_lateral_band or abs(lat) < 1e-3:
+                continue  # well off to the side, or dead-centre (no committed side)
+
+            wrong_dir = np.sign(lat) * w  # block the side the obstacle is on
+            center_xy = o[:2] + wrong_dir * (self.obstacle_radius + self.commit_wall_extent / 2.0)
+            center = np.array([center_xy[0], center_xy[1], self.commit_z_half])
+            # Box axes: local x = travel (u), local y = left normal (w), z = up. Use
+            # the fixed right-handed frame [u, w, z] (the box is symmetric in y, so
+            # the center offset alone puts the wall on the wrong side).
+            mat = np.array([[u[0], w[0], 0.0], [u[1], w[1], 0.0], [0.0, 0.0, 1.0]])
+            quat = R.from_matrix(mat).as_quat()
+            half = np.array([
+                self.commit_wall_thickness / 2.0,
+                self.commit_wall_extent / 2.0,
+                self.commit_z_half,
+            ])
+            blocks.append((center, quat, half))
+        return blocks
 
     def _should_block(self, obs, current, goal, left_gate_idx):
         """Reversal/flyback decision for the gate left behind on a segment.

@@ -39,7 +39,7 @@ from lsy_drone_racing.control import Controller
 ## Modular imports
 from lsy_drone_racing.control.controllers.modules.path_generator import WaypointPathGenerator, GatePassingPathGenerator, AStarGatePathGenerator
 from lsy_drone_racing.control.controllers.modules.timing_module import UniformTiming, DistanceTiming
-from lsy_drone_racing.control.controllers.modules.trajectory_module import SplineTrajectory
+from lsy_drone_racing.control.controllers.modules.trajectory_module_improved import SplineTrajectory
 
 ## Debug stuff
 from pathlib import Path

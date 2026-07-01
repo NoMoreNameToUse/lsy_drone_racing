@@ -39,7 +39,10 @@ class PathPostProcessor:
 
     def __init__(
         self,
-        resample_step: float = 0.10,
+        resample_step: float = 0.2,
+        smooth_iterations: int = 0,
+        smooth_weight: float = 0.4,
+        smooth_max_step: float = 0.03,
         pole_radius: float = 0.15,
         min_clearance: float = 0.18,
         influence: float = 0.6,
@@ -57,6 +60,14 @@ class PathPostProcessor:
                 geometry spline and resampling at this arc-length step (m); 0
                 disables. Dense waypoints give the clearance tube and the timing
                 curvature a fine, per-10cm resolution. Runs regardless of ``enabled``.
+            smooth_iterations: Laplacian smoothing sweeps applied to the densified
+                path (0 = off). Each sweep pulls interior points toward the midpoint
+                of their neighbours, shaving the A* staircase / sharp corners so the
+                curvature drops and the line can be flown faster. Endpoints and
+                near-gate points are locked; the clearance floor runs after, so a
+                shortcut toward a pole is pushed back to safety.
+            smooth_weight: Laplacian step fraction lambda in [0, 1] (~0.4).
+            smooth_max_step: Per-sweep cap on a point's smoothing displacement (m).
             pole_radius: Effective obstacle radius (pole + drone half-width); the
                 tube clearance is measured beyond this.
             min_clearance: Required free clearance beyond ``pole_radius`` (the hard
@@ -67,10 +78,13 @@ class PathPostProcessor:
             iterations: Number of nudge sweeps (0 disables the nudge, floor only).
             gate_lock_radius: Waypoints within this of a gate centre are locked.
             max_tube: Upper cap on the stored clearance value.
-            enabled: If False, the nudge/floor refinement is skipped; the path is
-                still densified and the tube still returned.
+            enabled: If False, the smoothing/nudge/floor refinement is skipped; the
+                path is still densified and the tube still returned.
         """
         self.resample_step = resample_step
+        self.smooth_iterations = smooth_iterations
+        self.smooth_weight = smooth_weight
+        self.smooth_max_step = smooth_max_step
         self.pole_radius = pole_radius
         self.min_clearance = min_clearance
         self.influence = influence
@@ -106,13 +120,16 @@ class PathPostProcessor:
         poles = np.asarray(obs.get("obstacles_pos", np.empty((0, 3))), dtype=float)
         gates = np.asarray(obs.get("gates_pos", np.empty((0, 3))), dtype=float)
 
-        if not self.enabled or len(path) < 3 or poles.size == 0:
+        if not self.enabled or len(path) < 3:
             return path, self._clearance(path, poles)
 
         movable = self._movable_mask(path, gates)
-        for _ in range(self.iterations):
-            path = self._nudge(path, poles, movable)
-        path = self._enforce_floor(path, poles, movable)
+        if self.smooth_iterations > 0:
+            path = self._smooth(path, movable)
+        if poles.size > 0:
+            for _ in range(self.iterations):
+                path = self._nudge(path, poles, movable)
+            path = self._enforce_floor(path, poles, movable)
         return path, self._clearance(path, poles)
 
     # ------------------------------------------------------------------ helpers
@@ -133,6 +150,28 @@ class PathPostProcessor:
         u = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))])
         n = max(2, int(np.ceil(u[-1] / self.resample_step)) + 1)
         return PchipInterpolator(u, pts, axis=0)(np.linspace(0.0, u[-1], n))
+
+    def _smooth(
+        self, path: NDArray[np.floating], movable: NDArray[np.bool_]
+    ) -> NDArray[np.floating]:
+        """Laplacian smoothing: pull each free point toward its neighbours' midpoint.
+
+        Shaves the A* staircase / sharp corners (lower curvature -> higher
+        feasible speed). Locked points (endpoints, near-gate) stay put, and each
+        point's per-sweep move is capped so the path can't collapse; the clearance
+        floor runs afterwards to undo any shortcut that grazed a pole.
+        """
+        path = path.copy()
+        for _ in range(self.smooth_iterations):
+            lap = np.zeros_like(path)
+            lap[1:-1] = 0.5 * (path[:-2] + path[2:]) - path[1:-1]
+            step = self.smooth_weight * lap
+            n = np.linalg.norm(step, axis=1)
+            scale = np.where(n > self.smooth_max_step, self.smooth_max_step / np.maximum(n, 1e-9), 1.0)
+            step *= scale[:, None]
+            step[~movable] = 0.0
+            path = path + step
+        return path
 
     def _movable_mask(
         self, path: NDArray[np.floating], gates: NDArray[np.floating]

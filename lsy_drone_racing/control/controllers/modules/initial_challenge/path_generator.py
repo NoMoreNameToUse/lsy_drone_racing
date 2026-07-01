@@ -186,7 +186,7 @@ class AStarGatePathGenerator:
         max_astar_iterations: int = 200_000,
         endpoint_snap_distance: float = 0.30,
         prune_path: bool = False,
-        final_extension_distance: float = 0.60,
+        final_extension_distance: float = 0.80,
         velocity_bias_weight: float = 0.20,
         velocity_bias_decay: float = 8.0,
         min_velocity_for_bias: float = 0.10,

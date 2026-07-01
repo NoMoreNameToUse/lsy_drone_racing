@@ -62,6 +62,7 @@ Need to go in from reverse for first gate
 1756798599
 601977100
 447542283
+216920647
 
 # infeasable intersting cases 
 

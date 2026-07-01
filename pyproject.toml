@@ -30,10 +30,12 @@ sim = [
     "gymnasium[array-api] >= 1.2.0",
     "ml-collections >= 1.0",
     "packaging >= 24.0",
+    "numba",
     "drone-models",
     "drone-controllers",
     "crazyflow>=0.1.0",
     "jax >= 0.7",
+    "torch == 2.8.0",
     "warp-lang",
 ]
 # option[gpu]: simulation with gpu
@@ -73,6 +75,8 @@ compilers = ">=1.9.0, <1.11.0"
 cmake = "==3.26.0"  # Pinned for motion_capture_tracking
 make = "==4.4.1"  # Pinned for motion_capture_tracking
 openblas = ">=0.3.30,<0.4"
+six = ">=1.17.0,<2"
+plotly = ">=6.8.0,<7"
 
 [tool.pixi.pypi-dependencies]
 lsy_drone_racing = { path = ".", editable = true }
