@@ -79,14 +79,48 @@ def create_acados_model(parameters: dict) -> AcadosModel:
     return model
 
 
+# Tunable MPC hyperparameters (state weights [pos xyz, rpy, vel xyz, drpy], input
+# weights [rpy, thrust], horizon N). One explicit surface so the tuning harness
+# (utility/sim/tune_mpc.py) can override them per trial.
+#
+# These values are the Optuna TPE result (120 trials, continuous score) that
+# generalized: on held-out validation seeds pass rate went 15/25 -> 22/25 (60 ->
+# 88%) with lower tracking RMSE (0.151 -> 0.138); the train gain matched, so it is
+# not seed overfit. The search loosened attitude/rate/velocity tracking and leaned
+# on position (esp. z): over-weighting attitude/rates made the MPC sluggish to
+# reorient for turns (the gate-frame-clip failure). Prior hand-tuned defaults were
+# N=25, q=(50,50,400, 1,1,1, 10,10,10, 5,5,5), r=(1,1,1, 50).
+MPC_HYPERPARAMS = {
+    "N": 20,
+    "q_diag": (18.32, 18.32, 488.73, 0.180, 0.180, 0.180, 1.297, 1.297, 1.297, 0.313, 0.313, 0.313),
+    "r_diag": (1.0, 1.0, 1.0, 110.85),
+}
+
+
 def create_ocp_solver(
-    Tf: float, N: int, parameters: dict, verbose: bool = False
+    Tf: float,
+    N: int,
+    parameters: dict,
+    q_diag=None,
+    r_diag=None,
+    verbose: bool = False,
 ) -> tuple[AcadosOcpSolver, AcadosOcp]:
-    """Creates an acados Optimal Control Problem and Solver."""
+    """Creates an acados Optimal Control Problem and Solver.
+
+    ``q_diag`` / ``r_diag`` default to ``MPC_HYPERPARAMS`` so a plain call
+    reproduces the hand-tuned controller; the tuning harness passes explicit
+    weight vectors. Each horizon ``N`` gets its own codegen name/json so several
+    compiled solvers (one per N) can coexist in-process without clobbering each
+    other's shared library -- required for the harness's build cache.
+    """
+    q_diag = MPC_HYPERPARAMS["q_diag"] if q_diag is None else q_diag
+    r_diag = MPC_HYPERPARAMS["r_diag"] if r_diag is None else r_diag
+
     ocp = AcadosOcp()
 
-    # Set model
+    # Set model (unique name per horizon so per-N libs don't collide).
     ocp.model = create_acados_model(parameters)
+    ocp.model.name = f"mpc_attitude_N{N}"
 
     # Get Dimensions
     nx = ocp.model.x.rows()
@@ -106,33 +140,10 @@ def create_ocp_solver(
     ocp.cost.cost_type = "LINEAR_LS"
     ocp.cost.cost_type_e = "LINEAR_LS"
 
-    # Weights
-    # State weights
-    Q = np.diag(
-        [
-            50.0,  # pos
-            50.0,  # pos
-            400.0,  # pos
-            1.0,  # rpy
-            1.0,  # rpy
-            1.0,  # rpy
-            10.0,  # vel
-            10.0,  # vel
-            10.0,  # vel
-            5.0,  # drpy
-            5.0,  # drpy
-            5.0,  # drpy
-        ]
-    )
-    # Input weights (reference is upright orientation and hover thrust)
-    R = np.diag(
-        [
-            1.0,  # rpy
-            1.0,  # rpy
-            1.0,  # rpy
-            50.0,  # thrust
-        ]
-    )
+    # Weights (state: pos xyz, rpy, vel xyz, drpy; input: rpy, thrust).
+    Q = np.diag(np.asarray(q_diag, dtype=float))
+    # Input weights (reference is upright orientation and hover thrust).
+    R = np.diag(np.asarray(r_diag, dtype=float))
 
     Q_e = Q.copy()
     ocp.cost.W = scipy.linalg.block_diag(Q, R)
@@ -184,7 +195,7 @@ def create_ocp_solver(
 
     acados_ocp_solver = AcadosOcpSolver(
         ocp,
-        json_file="c_generated_code/lsy_example_mpc.json",
+        json_file=f"c_generated_code/{ocp.model.name}.json",
         verbose=verbose,
         build=True,
         generate=True,
@@ -218,12 +229,12 @@ class AttitudeMPC(Controller):
 
         # Dynamics-aware timing (curvature/clearance/reversal-shaped, accel-limited).
         self.timing = DynamicTiming(
-            v_max=3,
-            a_max=2,
-            clearance_ref=0.35,
-            clearance_floor_speed=0.8,
-            reversal_speed=0.3,
-            min_segment_time=0.025,
+            v_max=4,
+            a_max=4,
+            clearance_ref=0.3,
+            clearance_floor_speed=1,
+            reversal_speed=0.6,
+            min_segment_time=0.01,
         )
 
         # Densify + per-point clearance tube provider for the timing module.
@@ -271,8 +282,8 @@ class AttitudeMPC(Controller):
         )
         self._executed_pos = []
 
-        ## End debug outputs 
-        self._N = 25
+        ## End debug outputs
+        self._N = MPC_HYPERPARAMS["N"]
         self._dt = 1 / config.env.freq
         self._T_HORIZON = self._N * self._dt
 
