@@ -18,11 +18,38 @@ from scipy.spatial.transform import Rotation
 
 from lsy_drone_racing.control import Controller
 from lsy_drone_racing.control.controllers.modules.path_generator_mppi import (
+    AStarGatePathGenerator,
+    DStarLiteGatePathGenerator,
     GatePassingPathGenerator,
+    RRTStarGatePathGenerator,
     ThetaStarGatePathGenerator,
 )
+from lsy_drone_racing.control.controllers.modules.curve_gate import CurveGatePathGenerator
 from lsy_drone_racing.control.controllers.modules.timing_module_mppi import MotionAwareTiming
 from lsy_drone_racing.control.controllers.modules.initial_challenge.trajectory_module import SplineTrajectory
+
+# --- controller_mpc_astar reference pipeline (selectable via path_planner) ---
+# These are light (no acados), so importing them keeps the MPPI GPU/acados-free.
+from lsy_drone_racing.control.controllers.modules.path_generator_improved import AStarImprovedPathGenerator
+from lsy_drone_racing.control.controllers.modules.post_processing import PathPostProcessor
+from lsy_drone_racing.control.controllers.modules.timing_module_improved import DynamicTiming
+from lsy_drone_racing.control.controllers.modules.trajectory_module_improved import ImprovedSplineTrajectory
+
+# Reference-speed profile for the "mpc_astar" pipeline UNDER THE MPPI TRACKER.
+# Deliberately slower than controller_mpc_astar's own timing (v_max=4, a_lat=2.5):
+# the CPU point-mass MPPI is a softer tracker with a lower speed ceiling, so an
+# MPC-speed reference is untrackable and it crashes. Empirical (6 level3 seeds,
+# mpc_astar pipeline): v_max=2.0 -> 1/6 passed; v_max=1.6/a_lat=2.2 -> 5/6. Slower
+# still (v_max=1.4) is equally reliable but ~0.6s slower, so 1.6 is the sweet spot.
+_MPC_ASTAR_TIMING = {
+    "v_max": 1.6,
+    "a_max": 2.5,
+    "a_lat_max": 2.2,
+    "clearance_ref": 0.3,
+    "clearance_floor_speed": 0.8,
+    "reversal_speed": 0.3,
+    "min_segment_time": 0.01,
+}
 
 if TYPE_CHECKING:
     from crazyflow import Sim
@@ -33,23 +60,39 @@ if TYPE_CHECKING:
 class MPPIConfig:
     """Parameters chosen for a 50 Hz controller running on a laptop CPU."""
 
-    horizon: int = 24
-    num_samples: int = 384
-    temperature: float = 5.0
+    # Reference pipeline the MPPI tracker follows. Swap it by editing this one
+    # string (or overriding it in ``[controller.mppi]`` of the race config).
+    # Native-MPPI planners (motion-aware timing + PCHIP spline):
+    #   "theta_star" (default), "astar", "d_star_lite", "rrt_star", "curve".
+    # Full controller_mpc_astar pipeline (A*+reversal/commit path gen, clearance
+    # post-processing, dynamics-aware timing, arc-length spline):
+    #   "mpc_astar".
+    # See _build_reference_pipeline.
+    path_planner: str = "mpc_astar"
+
+    # --- MPPI core (active in every mode) ---
+    horizon: int = 35            # rollout steps (~0.70 s @ 50 Hz lookahead)
+    num_samples: int = 256       # rollouts/step; 256 > 100 on reliability (5/6 vs 4/6)
+                                 # and ~8.5 ms/step here, within the 50 Hz budget.
+    temperature: float = 6.0
     iterations: int = 1
-    nominal_speed: float = 0.93
-    max_tilt: float = 0.504
-    # Local rollout clearance.  The global A* path uses a larger 0.28 m
-    # inflation, while this smaller value keeps randomized gates passable when
-    # a pole is deliberately placed close to an opening.
-    obstacle_clearance: float = 0.234
-    gate_entry_distance: float = 0.436
-    gate_constraint_distance: float = 0.498
-    turn_time_gain: float = 0.524
+    max_tilt: float = 0.504      # ~29 deg, matches the env rpy limit
+    # --- cost / rollout clearance (active in every mode) ---
+    # Local rollout clearance.  The global A* path uses a larger inflation, while
+    # this smaller value keeps randomized gates passable when a pole is
+    # deliberately placed close to an opening.
+    obstacle_clearance: float = 0.215
+    gate_constraint_distance: float = 0.3
+    # --- replanning (active in every mode) ---
     replan_position_threshold: float = 0.05
     replan_interval_s: float = 0.25
     visualization_rollout_stride: int = 3
     seed: int = 7
+    # --- native-MPPI stack ONLY (unused when path_planner == "mpc_astar", where
+    #     the reference speed is set by _MPC_ASTAR_TIMING instead) ---
+    nominal_speed: float = 1.0   # MotionAwareTiming cruise speed
+    turn_time_gain: float = 0.524
+    gate_entry_distance: float = 0.3  # native planners' GatePassingPathGenerator
 
 
 def load_mppi_config(config: Any) -> MPPIConfig:
@@ -103,23 +146,7 @@ class AttitudeMPPI(Controller):
         self._bounds_low = np.asarray(limits.pos_limit_low, dtype=float)
         self._bounds_high = np.asarray(limits.pos_limit_high, dtype=float)
 
-        self._path_generator = ThetaStarGatePathGenerator(
-            gate_passing_generator=GatePassingPathGenerator(
-                gate_entry_distance=self.cfg.gate_entry_distance,
-                max_nudge=0.0,
-            ),
-            grid_resolution=0.075,
-            safety_margin=0.10,
-            obstacle_radius=0.23,
-            heuristic_weight=1.15,
-            prune_path=False,
-        )
-        self._timing = MotionAwareTiming(
-            nominal_speed=self.cfg.nominal_speed,
-            min_segment_time=0.16,
-            turn_time_gain=self.cfg.turn_time_gain,
-            vertical_time_gain=0.6,
-        )
+        self._build_reference_pipeline()
 
         self._tick = 0
         self._last_replan_tick = -10**9
@@ -133,6 +160,83 @@ class AttitudeMPPI(Controller):
         self._candidate_paths = np.empty((0, self.cfg.horizon, 3), dtype=float)
         self._plan_trajectory(obs)
 
+    def _build_reference_pipeline(self):
+        """Set up the reference stack (path gen + timing + post-proc + trajectory).
+
+        ``cfg.path_planner == "mpc_astar"`` selects the full pipeline used by
+        controller_mpc_astar (A* with reversal/commit handling, clearance
+        post-processing, dynamics-aware ``DynamicTiming``, arc-length
+        ``ImprovedSplineTrajectory``). Every other value uses the native MPPI
+        stack (the selected planner + ``MotionAwareTiming`` + PCHIP
+        ``SplineTrajectory``). ``_plan_trajectory`` and the MPPI tracker consume
+        ``self.trajectory`` identically for either stack.
+        """
+        if self.cfg.path_planner == "mpc_astar":
+            self._path_generator = AStarImprovedPathGenerator(
+                grid_resolution=0.05,
+                safety_margin=0.05,
+                obstacle_radius=0.18,
+                prune_path=True,
+            )
+            self._post_proc = PathPostProcessor(enabled=True)
+            self._timing = DynamicTiming(**_MPC_ASTAR_TIMING)
+            self._trajectory_cls = ImprovedSplineTrajectory
+        else:
+            self._path_generator = self._build_path_generator()
+            self._post_proc = None
+            self._timing = MotionAwareTiming(
+                nominal_speed=self.cfg.nominal_speed,
+                min_segment_time=0.16,
+                turn_time_gain=self.cfg.turn_time_gain,
+                vertical_time_gain=0.6,
+            )
+            self._trajectory_cls = SplineTrajectory
+
+    def _build_path_generator(self):
+        """Construct the native-MPPI path generator selected by ``cfg.path_planner``.
+
+        The A*-family planners (``astar`` / ``theta_star`` / ``d_star_lite``)
+        share the grid-based construction; ``rrt_star`` (sampling-based) and
+        ``curve`` (geometric detours) have their own parameter sets. All expose
+        ``generate(obs, config)`` so the tracker is agnostic to the choice. To add
+        a planner, import it above and register a ``case`` here.
+        """
+        gate_passing = GatePassingPathGenerator(
+            gate_entry_distance=self.cfg.gate_entry_distance, max_nudge=0.0
+        )
+        grid_kwargs = dict(
+            gate_passing_generator=gate_passing,
+            grid_resolution=0.075,
+            safety_margin=0.10,
+            obstacle_radius=0.23,
+            heuristic_weight=1.15,
+            prune_path=False,
+        )
+        match self.cfg.path_planner:
+            case "theta_star":
+                return ThetaStarGatePathGenerator(**grid_kwargs)
+            case "astar":
+                return AStarGatePathGenerator(**grid_kwargs)
+            case "d_star_lite":
+                return DStarLiteGatePathGenerator(**grid_kwargs)
+            case "rrt_star":
+                return RRTStarGatePathGenerator(
+                    gate_passing_generator=gate_passing,
+                    collision_resolution=0.05,
+                    safety_margin=0.10,
+                    obstacle_radius=0.23,
+                    prune_path=False,
+                )
+            case "curve":
+                return CurveGatePathGenerator(
+                    gate_entry_distance=self.cfg.gate_entry_distance
+                )
+            case other:
+                raise ValueError(
+                    f"Unknown path_planner {other!r}; choose from: "
+                    "theta_star, astar, d_star_lite, rrt_star, curve"
+                )
+
     def _hover_sequence(self) -> NDArray[np.float64]:
         u = np.zeros((self.cfg.horizon, 4), dtype=float)
         u[:, 3] = self._hover_thrust
@@ -144,8 +248,13 @@ class AttitudeMPPI(Controller):
             # This is only expected after the final gate; keep a stationary reference valid.
             p = np.asarray(obs["pos"], dtype=float)
             waypoints = np.vstack((p, p + np.array([0.0, 0.0, 1e-4])))
-        times = self._timing.compute(waypoints)
-        self.trajectory = SplineTrajectory(waypoints, times, self._freq)
+        if self._post_proc is not None:
+            # mpc_astar pipeline: densify + clearance tube, then clearance-aware timing.
+            waypoints, clearance = self._post_proc.process(waypoints, obs, self._config)
+            times = self._timing.compute(waypoints, clearance=clearance)
+        else:
+            times = self._timing.compute(waypoints)
+        self.trajectory = self._trajectory_cls(waypoints, times, self._freq)
         self._trajectory_tick = 0
         self._control_sequence = self._hover_sequence()
         self._cache_layout(obs)
