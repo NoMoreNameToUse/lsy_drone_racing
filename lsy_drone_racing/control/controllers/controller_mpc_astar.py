@@ -96,6 +96,27 @@ MPC_HYPERPARAMS = {
     "r_diag": (1.0, 1.0, 1.0, 110.85),
 }
 
+# Tunable trajectory-timing hyperparameters (DynamicTiming). Same override pattern
+# as MPC_HYPERPARAMS so the harness can tune the reference speed profile per trial.
+# a_lat_max is the corner-speed cap (v_corner = sqrt(a_lat_max / curvature)).
+#
+# a_lat_max was left at 4.0 when v_max/a_max were bumped to the fast (v4) regime,
+# which over-drove the corners (the gate-frame-clip failure). A 50-seed sensitivity
+# sweep (MPC weights fixed) found a 40/50 reliability plateau for a_lat_max in
+# 2.0-3.0 that falls off a cliff by 3.5; 4.0 sat past the cliff at 36/50. Set to
+# 2.5 (plateau, best score): 36->40/50 pass, RMSE 0.186->0.153, still faster than
+# the v3 config. Alternatives: 2.0 (lowest RMSE / max margin), 3.0 (fastest on the
+# plateau, but at the cliff edge).
+TIMING_HYPERPARAMS = {
+    "v_max": 4.0,
+    "a_max": 3.5,
+    "a_lat_max": 2.5,
+    "clearance_ref": 0.3,
+    "clearance_floor_speed": 1.0,
+    "reversal_speed": 0.6,
+    "min_segment_time": 0.01,
+}
+
 
 def create_ocp_solver(
     Tf: float,
@@ -228,14 +249,7 @@ class AttitudeMPC(Controller):
         )
 
         # Dynamics-aware timing (curvature/clearance/reversal-shaped, accel-limited).
-        self.timing = DynamicTiming(
-            v_max=4,
-            a_max=4,
-            clearance_ref=0.3,
-            clearance_floor_speed=1,
-            reversal_speed=0.6,
-            min_segment_time=0.01,
-        )
+        self.timing = DynamicTiming(**TIMING_HYPERPARAMS)
 
         # Densify + per-point clearance tube provider for the timing module.
         self.post_proc = PathPostProcessor(enabled=True)

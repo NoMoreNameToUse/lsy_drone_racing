@@ -9,7 +9,7 @@ Current architecture for the entry challenge
 - Simple three point entry center exit waypoint selection with simple collision avoidance for the gates
 - Between gates A* Brute Force Oooga Booga path generator using a 3D Occupancy grid and point snapping and waypoint pruning
 - Very simple distance based timing
-- And still using baseline MPC that is given as example
+- And still using baseline RL that is given as example
 
 A lot of future improvement possible, but I was low on time and this should be enough for the entry test
 
@@ -36,8 +36,8 @@ from lsy_drone_racing.control import Controller
 from lsy_drone_racing.control.train_rl import Agent
 
 ## Modular imports
-from lsy_drone_racing.control.controllers.modules.path_generator import AStarGatePathGenerator
-from lsy_drone_racing.control.controllers.modules.timing_module import DistanceTiming
+from lsy_drone_racing.control.controllers.modules.initial_challenge.path_generator import AStarGatePathGenerator
+from lsy_drone_racing.control.controllers.modules.initial_challenge.timing_module import DistanceTiming
 from lsy_drone_racing.control.controllers.modules.trajectory_module_improved import SplineTrajectory
 
 
@@ -73,7 +73,7 @@ class AttitudeMPC(Controller):
         ##self.timing = UniformTiming()
 
         self.timing = DistanceTiming(
-            nominal_speed=2,
+            nominal_speed=1.2,
             min_segment_time=0.12,
         )
 
@@ -134,7 +134,7 @@ class AttitudeMPC(Controller):
         self.thrust_max = self.drone_params["thrust_max"] * 4
 
         self.agent = Agent((13 + 3 * self.n_samples + self.n_obs * 13 + 4,), (4,)).to("cpu")
-        model_path = Path(__file__).resolve().parents[1] / "ppo_drone_racing.ckpt"
+        model_path = Path(__file__).resolve().parents[2] / "ppo_drone_racing.ckpt"
         self.agent.load_state_dict(torch.load(model_path, map_location=torch.device("cpu")))
         self.agent.eval()
 

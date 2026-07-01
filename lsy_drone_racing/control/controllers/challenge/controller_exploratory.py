@@ -37,8 +37,8 @@ from scipy.spatial.transform import Rotation as R
 from lsy_drone_racing.control import Controller
 
 ## Modular imports
-from lsy_drone_racing.control.controllers.modules.path_generator import WaypointPathGenerator, GatePassingPathGenerator, AStarGatePathGenerator
-from lsy_drone_racing.control.controllers.modules.timing_module import UniformTiming, DistanceTiming
+from lsy_drone_racing.control.controllers.modules.initial_challenge.path_generator import WaypointPathGenerator, GatePassingPathGenerator, AStarGatePathGenerator
+from lsy_drone_racing.control.controllers.modules.initial_challenge.timing_module import UniformTiming, DistanceTiming
 from lsy_drone_racing.control.controllers.modules.trajectory_module_improved import SplineTrajectory
 
 ## Debug stuff
@@ -212,7 +212,7 @@ class AttitudeMPC(Controller):
             grid_resolution=0.05,
             safety_margin=0.05,
             obstacle_radius=0.215,
-            prune_path=False,
+            prune_path=True,
             )
         ##self.timing = UniformTiming()
 

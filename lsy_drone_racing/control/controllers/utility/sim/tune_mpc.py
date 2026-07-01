@@ -78,9 +78,11 @@ _ALL = list(DEFAULT_SEEDS)
 TRAIN_SEEDS = _ALL[0::2]
 VAL_SEEDS = _ALL[1::2]
 
-# The hand-tuned defaults (for the baseline / N sweep).
+# The current committed defaults (baseline for the N sweep / generalization check).
+DEFAULT_N = int(ctl.MPC_HYPERPARAMS["N"])
 DEFAULT_Q = tuple(ctl.MPC_HYPERPARAMS["q_diag"])
 DEFAULT_R = tuple(ctl.MPC_HYPERPARAMS["r_diag"])
+DEFAULT_TIMING = dict(ctl.TIMING_HYPERPARAMS)
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +257,55 @@ def sweep_n(config: str = "level3.toml", ns=(15, 18, 20, 22, 25, 28, 32), seeds=
     return rows
 
 
+def sweep_timing(
+    config: str = "level3.toml",
+    param: str = "a_lat_max",
+    values=(2.0, 2.5, 3.0, 3.5, 4.0, 5.0),
+    seeds=None,
+    full: bool = True,
+):
+    """One-knob sensitivity sweep over a DynamicTiming param (MPC weights fixed).
+
+    Holds the committed MPC weights constant and varies a single timing
+    hyperparameter (e.g. ``a_lat_max``, the corner-speed cap), printing the
+    pass/score/RMSE curve. ``full`` uses all seeds (low variance, matches the
+    tuning protocol); else the train split.
+    """
+    cfg = _load(config)
+    if seeds is not None:
+        seeds = list(seeds)
+    elif full:
+        seeds = list(_ALL)
+    else:
+        seeds = TRAIN_SEEDS
+    env = _make_env(cfg)
+
+    # Pin MPC weights to the committed default for the whole sweep.
+    ctl.MPC_HYPERPARAMS = {"N": DEFAULT_N, "q_diag": DEFAULT_Q, "r_diag": DEFAULT_R}
+    base_timing = dict(DEFAULT_TIMING)
+    base_val = base_timing.get(param)
+
+    print(f"{param} sweep on {len(seeds)} seeds "
+          f"(committed default {param}={base_val}; MPC weights fixed)\n")
+    rows = []
+    for v in values:
+        ctl.TIMING_HYPERPARAMS = {**base_timing, param: v}
+        t0 = _time.perf_counter()
+        results = [_run_seed(env, cfg, s) for s in seeds]
+        score, meta = _score(results)
+        dt = _time.perf_counter() - t0
+        rows.append((v, meta))
+        mark = "  <- current" if base_val is not None and abs(v - base_val) < 1e-9 else ""
+        print(f"  {param}={v:<5}  score={meta['score']:+.4f}  pass={meta['npass']:>2}/{meta['n']}  "
+              f"gates={meta['gates_frac']:.3f}  rmse={meta['rmse']:.4f}  "
+              f"t_norm={meta['t_norm']:.3f}  ({dt:.0f}s){mark}")
+    ctl.TIMING_HYPERPARAMS = base_timing
+    env.close()
+    best = max(rows, key=lambda kv: kv[1]["score"])
+    print(f"\nBest {param} by score: {best[0]}  {best[1]}")
+    return rows
+
+
 def score_one(config: str = "level3.toml", n: int = 25, q=None, r=None, seeds=None):
     """Score one explicit config on the given (default: train) seeds."""
     cfg = _load(config)
@@ -276,6 +327,7 @@ def tune(
     n_trials: int = 120,
     train=None,
     val=None,
+    full: bool = False,
     out: str = "debug_outputs/mpc_tune",
 ):
     """Bayesian (Optuna TPE) search over weights + horizon, then validate.
@@ -283,23 +335,36 @@ def tune(
     Search space (log-scale weights): pos-xy, pos-z, vel, attitude (rpy), body
     rates (drpy), thrust-input; horizon N categorical. The rpy input weight is
     fixed at 1.0 as the reference scale.
+
+    ``full=True`` tunes on ALL seeds (train == val == the whole curated set). Use
+    this when per-seed variance makes a 25-seed subset too noisy to tune on (a
+    6-seed split swing was observed at v_max=4); the winner must then be confirmed
+    on the independent ``evaluate_seeds`` path before wiring, since there is no
+    held-out set.
     """
     import optuna
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     cfg = _load(config)
-    train = TRAIN_SEEDS if train is None else list(train)
-    val = VAL_SEEDS if val is None else list(val)
+    if full:
+        train = list(_ALL)
+        val = list(_ALL)
+    else:
+        train = TRAIN_SEEDS if train is None else list(train)
+        val = VAL_SEEDS if val is None else list(val)
     env = _make_env(cfg)
 
     def objective(trial):
-        N = trial.suggest_categorical("N", [15, 18, 20, 22, 25, 28, 32])
-        pos_xy = trial.suggest_float("pos_xy", 10.0, 1000.0, log=True)
-        pos_z = trial.suggest_float("pos_z", 50.0, 2000.0, log=True)
-        vel = trial.suggest_float("vel", 1.0, 100.0, log=True)
-        att = trial.suggest_float("att", 0.1, 20.0, log=True)
-        rate = trial.suggest_float("rate", 0.1, 20.0, log=True)
-        thrust = trial.suggest_float("thrust_R", 5.0, 200.0, log=True)
+        # Wider space for the faster (v_max=4, a_max=4) regime: higher-N horizons
+        # for lookahead at speed, and looser lower bounds on attitude/rate/vel
+        # (the v_max=3 winner sat near att=0.18/rate=0.31/vel=1.3).
+        N = trial.suggest_categorical("N", [18, 20, 22, 25, 28, 32, 36])
+        pos_xy = trial.suggest_float("pos_xy", 5.0, 2000.0, log=True)
+        pos_z = trial.suggest_float("pos_z", 50.0, 3000.0, log=True)
+        vel = trial.suggest_float("vel", 0.2, 200.0, log=True)
+        att = trial.suggest_float("att", 0.02, 20.0, log=True)
+        rate = trial.suggest_float("rate", 0.02, 20.0, log=True)
+        thrust = trial.suggest_float("thrust_R", 5.0, 300.0, log=True)
         q = (pos_xy, pos_xy, pos_z, att, att, att, vel, vel, vel, rate, rate, rate)
         r = (1.0, 1.0, 1.0, thrust)
         score, meta, _ = _eval_config(env, cfg, train, N, q, r)
@@ -308,6 +373,20 @@ def tune(
 
     study = optuna.create_study(
         direction="maximize", sampler=optuna.samplers.TPESampler(seed=0)
+    )
+    # Anchor the search on the current committed config so TPE starts from a
+    # known-good point (and we get an apples-to-apples trial for it) instead of
+    # rediscovering it. Only enqueued if it lies inside the search space.
+    study.enqueue_trial(
+        {
+            "N": DEFAULT_N,
+            "pos_xy": DEFAULT_Q[0],
+            "pos_z": DEFAULT_Q[2],
+            "vel": DEFAULT_Q[6],
+            "att": DEFAULT_Q[3],
+            "rate": DEFAULT_Q[9],
+            "thrust_R": DEFAULT_R[3],
+        }
     )
     t0 = _time.perf_counter()
     best_so_far = [-1e9]
@@ -356,10 +435,17 @@ def tune(
 
 
 def DEFAULT_HP():
-    return {"N": 25, "q_diag": DEFAULT_Q, "r_diag": DEFAULT_R}
+    return {"N": DEFAULT_N, "q_diag": DEFAULT_Q, "r_diag": DEFAULT_R}
 
 
 if __name__ == "__main__":
     logging.basicConfig()
     logging.getLogger("lsy_drone_racing").setLevel(logging.WARNING)
-    fire.Fire({"sweep_n": sweep_n, "tune": tune, "score_one": score_one})
+    fire.Fire(
+        {
+            "sweep_n": sweep_n,
+            "sweep_timing": sweep_timing,
+            "tune": tune,
+            "score_one": score_one,
+        }
+    )

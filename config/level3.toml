@@ -4,7 +4,20 @@
 # | :-----------------: | :----------------------------: | :-------------------------: | :---------------: | :-------------: |
 # | `level3.toml`       | *Yes*                          | *Yes*                       | *Yes*             | Online planning |
 [controller]
-file = "controllers/controller_mpc_astar.py" # Put your controller file name here. Specifying a controller as argument to scripts will override this setting. Controllers are located in `lsy_drone_racing/control/`
+### Step 1: select an altitude controller for the evaluation scenario. Other modules would be selected inside the controller file itself. 
+
+## Original controller used for the initial acceptance challenge on level 2
+
+#file = "controllers/challenge/controller_rl.py"                    # Ooga booga path planner with stock RL, better performance than stock MPC
+#file = "controllers/challenge/controller_exploratory.py"           # First approach ooga booga path planner with stock MPC
+
+## Improved final controller designed for level 3
+
+file = "controllers/controller_mpc_astar.py"                       # MPC tuned in the loop using optuna
+#file = "controllers/controller_rl_astar.py"                         # 
+#file = "controllers/controller_mppi.py"                            # New MPPI altitude controller 
+
+
 
 [deploy]
 ### Settings only relevant for deployment
