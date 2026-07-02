@@ -1,25 +1,7 @@
-"""The Caveman Approach for an exploratory controller.
+""" 
 
-The controller is designed to be modular, with separate, quickly swappable
-components for path generation, timing, and trajectory generation.
+3Final MPC Controller paired with custom A* and path generation pipeline
 
-Current architecture for the entry challenge:
-
-- Simple three-point entry/center/exit waypoint selection with simple collision
-  avoidance for the gates
-- Between gates, a brute-force A* path generator using a 3D occupancy grid with
-  point snapping and waypoint pruning
-- Very simple distance-based timing
-- Still using the baseline MPC that is given as an example
-
-A lot of future improvement is possible, but I was low on time and this should be
-enough for the entry test.
-
-Idea collection:
-- Weighted and dynamics-aware A*
-- Better timing and trajectory generation
-- Better modularity
-- RL-based optimization
 """
 
 from __future__ import annotations  # Python 3.10 type hints

@@ -554,11 +554,21 @@ class Agent(nn.Module):
 
 # region Train
 def train_ppo(
-    args: Args, model_path: Path, device: torch.device, jax_device: str, wandb_enabled: bool = False
+    args: Args,
+    model_path: Path,
+    device: torch.device,
+    jax_device: str,
+    wandb_enabled: bool = False,
+    env_fn: Callable[..., VectorEnv] = make_envs,
 ) -> None:
     """Train.
 
     An implementation of PPO from cleanrl, see https://docs.cleanrl.dev/.
+
+    ``env_fn`` is the environment factory, called as
+    ``env_fn(num_envs, jax_device, torch_device, coefs)``. It defaults to
+    ``make_envs`` (random-spline tracking); ``train_rl_track.make_track_envs``
+    swaps in references sampled from the real A*+timing planner.
     """
     # train setup
     if wandb_enabled and wandb.run is None:
@@ -575,7 +585,7 @@ def train_ppo(
         "d_act_th_coef": args.d_act_th_coef,
         "act_coef": args.act_coef,
     }
-    envs = make_envs(
+    envs = env_fn(
         num_envs=args.num_envs, jax_device=jax_device, torch_device=device, coefs=r_coefs
     )
     assert isinstance(envs.single_action_space, gym.spaces.Box), (
@@ -635,10 +645,13 @@ def train_ppo(
             sum_rewards[next_done.bool()] = 0
             next_done = terminations | truncations
 
-            if wandb_enabled and next_done.any():
+            # Record completed-episode returns (always, for stdout progress);
+            # also stream to wandb when enabled.
+            if next_done.any():
                 for r in sum_rewards[next_done.bool()]:
-                    wandb.log({"train/reward": r.item()}, step=global_step)
                     sum_rewards_hist.append(r.item())
+                    if wandb_enabled:
+                        wandb.log({"train/reward": r.item()}, step=global_step)
 
         # bootstrap value if not done
         with torch.no_grad():
@@ -746,6 +759,12 @@ def train_ppo(
             )
         end_time = time.time()
         print(f"Iter {iteration}/{args.num_iterations} took {end_time - start_time:.2f} seconds")
+        # Periodic progress: mean return over recent completed episodes (learning
+        # signal for long, wandb-less runs). Rises as tracking improves.
+        if sum_rewards_hist and iteration % 20 == 0:
+            recent = sum_rewards_hist[-500:]
+            print(f"  [iter {iteration}/{args.num_iterations}] mean episode return "
+                  f"(last {len(recent)}): {np.mean(recent):.2f}")
     train_end_time = time.time()
     print(f"Training for {global_step} steps took {train_end_time - train_start_time:.2f} seconds.")
     if model_path is not None:

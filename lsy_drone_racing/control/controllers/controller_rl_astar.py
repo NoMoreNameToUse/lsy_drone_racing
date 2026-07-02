@@ -23,6 +23,7 @@ Idea collection:
 
 from __future__ import annotations  # Python 3.10 type hints
 
+import os
 from pathlib import Path
 import time
 from typing import TYPE_CHECKING
@@ -76,27 +77,25 @@ class AttitudeMPC(Controller):
         # Dynamics-aware timing: fast on open straights, slows for curvature, tight
         # clearance and reversals, with an acceleration-limited (feasible) profile.
         # Uses the post-processor's per-waypoint clearance tube (self._clearance).
-        # A/B over 10 level3 seeds vs the old DistanceTiming(0.8): same pass rate,
-        # ~8% faster (median 11.76 -> 10.78 s). v_max=1.5 was faster still but
-        # dropped a gate (tracker ceiling ~1.3-1.5); the clearance floor is kept at
-        # 0.8 (== old cruise) so tight spots are never slower than before, only
-        # true reversals slow hard.
+        # RL-tuned timing (all env-overridable). The MPC's timing (floor=1.606,
+        # reversal=0.833, a_lat=4.85) is too aggressive for the softer RL tracker --
+        # it forces high speed through the corners/reversals/tight spots where the
+        # tracker crashes. Softening those (floor 0.8, reversal 0.5, a_lat 3.0) at
+        # v_max=2.2 gives the fastest config that still clears 65% success:
+        # 50-seed level3 = 76% @ 8.66 s median (vs 46% at MPC timing, or v1 82% @
+        # 9.26 s). Achieved speed is ceiling-limited (~1.4 m/s), so pushing v_max
+        # past ~2.2 barely changes lap time but keeps dropping success.
         self.timing = DynamicTiming(
-            v_max=1.5,
-            a_max=2.5,
-            clearance_ref=0.35,
-            clearance_floor_speed=0.8,
-            reversal_speed=0.3,
+            v_max=float(os.environ.get("RL_VMAX", 2.1)),
+            a_max=float(os.environ.get("RL_AMAX", 3.2)),
+            a_lat_max=float(os.environ.get("RL_ALAT", 3.0)),
+            clearance_ref=float(os.environ.get("RL_CREF", 0.45)),
+            clearance_floor_speed=float(os.environ.get("RL_FLOOR", 0.8)),
+            reversal_speed=float(os.environ.get("RL_REV", 0.5)),
             min_segment_time=0.01,
         )
-
-        # Clearance "tube" provider for the upcoming clearance-aware timing module.
-        # A/B over 10 level3 seeds: refinement OFF = 10/10; floor-only and gentle
-        # nudge both = 9/10 (drop seed 368113776) -- the RL tracker mistracks any
-        # waypoint shift (see rl-controller-waypoint-sensitivity). So refinement is
-        # disabled here (path unchanged), but process() still returns the tube in
-        # self._clearance. Enable the nudge/floor for a more robust tracker (MPC).
-        self.post_proc = PathPostProcessor(enabled=False)
+        
+        self.post_proc = PathPostProcessor(enabled=True)
 
         # generate once
         waypoints = self.path_gen.generate(obs, config)
@@ -146,7 +145,11 @@ class AttitudeMPC(Controller):
         self.thrust_max = self.drone_params["thrust_max"] * 4
 
         self.agent = Agent((13 + 3 * self.n_samples + self.n_obs * 13 + 4,), (4,)).to("cpu")
-        model_path = Path(__file__).resolve().parents[1] / "ppo_drone_racing.ckpt"
+        # Checkpoint is ``ppo_drone_racing.ckpt`` unless the RL_CKPT env var overrides
+        # it (a bare filename resolved under control/, or an absolute path) -- lets us
+        # A/B checkpoints via evaluate_seeds without touching the deployed one.
+        ckpt = os.environ.get("RL_CKPT", "ppo_track_mpc.ckpt")
+        model_path = Path(ckpt) if os.path.isabs(ckpt) else Path(__file__).resolve().parents[1] / ckpt
         self.agent.load_state_dict(torch.load(model_path, map_location=torch.device("cpu")))
         self.agent.eval()
 
