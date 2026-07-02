@@ -13,9 +13,9 @@
 
 ## Improved final controller designed for level 3
 
-#file = "controllers/controller_mpc_astar.py"                       # MPC tuned in the loop using optuna
+file = "controllers/controller_mpc_astar.py"                       # MPC tuned in the loop using optuna
 #file = "controllers/controller_rl_astar.py"                         # 
-file = "controllers/controller_mppi.py"                            # New MPPI altitude controller 
+#file = "controllers/controller_mppi.py"                            # New MPPI altitude controller 
 
 
 

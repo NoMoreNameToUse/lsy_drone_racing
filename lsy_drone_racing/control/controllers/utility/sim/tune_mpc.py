@@ -83,6 +83,15 @@ DEFAULT_N = int(ctl.MPC_HYPERPARAMS["N"])
 DEFAULT_Q = tuple(ctl.MPC_HYPERPARAMS["q_diag"])
 DEFAULT_R = tuple(ctl.MPC_HYPERPARAMS["r_diag"])
 DEFAULT_TIMING = dict(ctl.TIMING_HYPERPARAMS)
+DEFAULT_PATHGEN = dict(ctl.PATHGEN_HYPERPARAMS)
+DEFAULT_POSTPROC = dict(ctl.POSTPROC_HYPERPARAMS)
+
+# Lap-time objective: minimum success rate the config must clear to be "feasible"
+# (below it, only reliability matters; above it, only speed). See _score_laptime.
+MIN_SUCCESS = 0.65
+# Separation constant so any feasible score (>= LAP_OFFSET - max_time) strictly
+# beats any infeasible score (< 1.0). Episodes are well under this many seconds.
+LAP_OFFSET = 20.0
 
 
 # ---------------------------------------------------------------------------
@@ -219,11 +228,63 @@ def _score(results: list[dict]) -> tuple[float, dict]:
     return score, meta
 
 
+def _score_laptime(results: list[dict], min_success: float = MIN_SUCCESS) -> tuple[float, dict]:
+    """Constrained lap-time objective: fastest lap subject to a success-rate floor.
+
+    Lexicographic, encoded as one scalar Optuna maximizes:
+      * **feasible** (success rate >= ``min_success``): ``score = LAP_OFFSET -
+        median lap time`` -- faster wins, and every feasible score outranks every
+        infeasible one.
+      * **infeasible**: ``score = success_rate + 0.1 * gates_frac`` (< 1.0 << any
+        feasible score) so the optimizer still climbs toward feasibility (partial
+        gate progress gives gradient even at zero full passes).
+
+    Median lap time is over *passed* seeds only, so a config that meets the floor
+    on the easier/faster seeds scores best -- exactly "fastest lap at >= floor".
+    Watch the train/val success gap: a config sitting right on the floor can slip
+    under it on held-out seeds.
+    """
+    n = len(results)
+    npass = sum(r["passed"] for r in results)
+    success = npass / max(n, 1)
+    gates_frac = float(np.mean([r["gates_passed"] / r["n_gates"] for r in results]))
+    passed_times = [r["time_s"] for r in results if r["passed"]]
+    median_time = statistics.median(passed_times) if passed_times else None
+
+    feasible = success >= min_success and passed_times
+    if feasible:
+        score = LAP_OFFSET - median_time
+    else:
+        score = success + 0.1 * gates_frac
+
+    meta = {
+        "score": round(score, 4),
+        "feasible": bool(feasible),
+        "npass": npass,
+        "n": n,
+        "success": round(success, 3),
+        "gates_frac": round(gates_frac, 3),
+        "median_time": None if median_time is None else round(median_time, 3),
+    }
+    return score, meta
+
+
 def _eval_config(env, cfg, seeds, N, q_diag, r_diag) -> tuple[float, dict, list]:
     """Set hyperparameters, run the seed set, return (score, meta, results)."""
     ctl.MPC_HYPERPARAMS = {"N": int(N), "q_diag": tuple(q_diag), "r_diag": tuple(r_diag)}
     results = [_run_seed(env, cfg, s) for s in seeds]
     score, meta = _score(results)
+    return score, meta, results
+
+
+def _eval_pipeline(env, cfg, seeds, pathgen, postproc, timing=None) -> tuple[float, dict, list]:
+    """Set path-gen/post-proc/timing surfaces (MPC pinned), score by lap time."""
+    ctl.MPC_HYPERPARAMS = {"N": DEFAULT_N, "q_diag": DEFAULT_Q, "r_diag": DEFAULT_R}
+    ctl.TIMING_HYPERPARAMS = dict(DEFAULT_TIMING if timing is None else timing)
+    ctl.PATHGEN_HYPERPARAMS = dict(pathgen)
+    ctl.POSTPROC_HYPERPARAMS = dict(postproc)
+    results = [_run_seed(env, cfg, s) for s in seeds]
+    score, meta = _score_laptime(results)
     return score, meta, results
 
 
@@ -434,6 +495,213 @@ def tune(
     return result
 
 
+def sweep_postproc(
+    config: str = "level3.toml",
+    param: str = "smooth_iterations",
+    values=(0, 1, 2, 3, 4, 6),
+    seeds=None,
+    full: bool = True,
+):
+    """One-knob sensitivity sweep over a path-gen/post-proc param (lap-time score).
+
+    Holds the committed MPC + timing constant and varies a single pipeline
+    hyperparameter (post-processor or path-generator), printing the
+    success/lap-time curve under the constrained lap-time objective. ``full`` uses
+    all seeds (matches the tuning protocol); else the train split.
+    """
+    cfg = _load(config)
+    if seeds is not None:
+        seeds = list(seeds)
+    elif full:
+        seeds = list(_ALL)
+    else:
+        seeds = TRAIN_SEEDS
+    env = _make_env(cfg)
+
+    in_postproc = param in DEFAULT_POSTPROC
+    in_pathgen = param in DEFAULT_PATHGEN
+    if not (in_postproc or in_pathgen):
+        env.close()
+        raise ValueError(
+            f"unknown param {param!r}; postproc={list(DEFAULT_POSTPROC)}, "
+            f"pathgen={list(DEFAULT_PATHGEN)}"
+        )
+    base_val = (DEFAULT_POSTPROC if in_postproc else DEFAULT_PATHGEN).get(param)
+
+    print(f"{param} sweep on {len(seeds)} seeds "
+          f"(committed default {param}={base_val}; MPC+timing fixed, "
+          f"success floor {MIN_SUCCESS:.0%})\n")
+    rows = []
+    for v in values:
+        pathgen = dict(DEFAULT_PATHGEN)
+        postproc = dict(DEFAULT_POSTPROC)
+        (postproc if in_postproc else pathgen)[param] = v
+        t0 = _time.perf_counter()
+        score, meta, _ = _eval_pipeline(env, cfg, seeds, pathgen, postproc)
+        dt = _time.perf_counter() - t0
+        rows.append((v, meta))
+        mark = "  <- current" if base_val is not None and _close(v, base_val) else ""
+        feas = "FEAS" if meta["feasible"] else "----"
+        print(f"  {param}={str(v):<6} [{feas}] score={meta['score']:+.3f}  "
+              f"pass={meta['npass']:>2}/{meta['n']} ({meta['success']:.0%})  "
+              f"med_t={meta['median_time']}  gates={meta['gates_frac']:.3f}  ({dt:.0f}s){mark}")
+    env.close()
+    # Best = fastest feasible; fall back to closest-to-feasible if none clear.
+    feas = [(v, m) for v, m in rows if m["feasible"]]
+    best = (max(feas, key=lambda vm: vm[1]["score"]) if feas
+            else max(rows, key=lambda vm: vm[1]["score"]))
+    print(f"\nBest {param}: {best[0]}  {best[1]}")
+    return rows
+
+
+def _close(a, b) -> bool:
+    try:
+        return abs(float(a) - float(b)) < 1e-9
+    except (TypeError, ValueError):
+        return a == b
+
+
+def tune_path(
+    config: str = "level3.toml",
+    n_trials: int = 120,
+    train=None,
+    val=None,
+    full: bool = False,
+    out: str = "debug_outputs/pipeline_tune",
+):
+    """Optuna TPE search over the path-gen + post-proc + timing surface for lap time.
+
+    Objective = constrained lap time (``_score_laptime``): minimise median lap
+    time subject to success rate >= ``MIN_SUCCESS`` (65%). MPC weights are pinned
+    (already tuned); the reference *shape/clearance* and the *timing profile* move.
+    Laplacian smoothing is deliberately left OFF (it raised crash rate in
+    practice), so it is not in the search space. Search space:
+      * post-proc densify step: ``resample_step`` (path density -> curvature);
+      * post-proc pole nudge: ``repulse_gain``, nudge ``iterations``, ``max_step``;
+      * hard clearance floor: ``min_clearance`` (reliability);
+      * A* inflation: ``obstacle_radius``, ``safety_margin`` (reliability<->detour);
+      * timing profile: ``v_max``, ``a_max``, ``a_lat_max`` (the speed/corner caps),
+        ``clearance_ref``, ``clearance_floor_speed``, ``reversal_speed``.
+
+    ``full=True`` tunes on ALL seeds (no held-out set; confirm the winner via the
+    independent evaluate_seeds path before wiring). Otherwise train/val split so
+    the train/val success gap flags a config sitting on the 65% cliff.
+    """
+    import optuna
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    cfg = _load(config)
+    if full:
+        train = list(_ALL)
+        val = list(_ALL)
+    else:
+        train = TRAIN_SEEDS if train is None else list(train)
+        val = VAL_SEEDS if val is None else list(val)
+    env = _make_env(cfg)
+
+    def _params(trial):
+        # Smoothing stays off (raises crash rate); not searched.
+        pathgen = dict(DEFAULT_PATHGEN)
+        postproc = dict(DEFAULT_POSTPROC)
+        timing = dict(DEFAULT_TIMING)
+        postproc["resample_step"] = trial.suggest_float("resample_step", 0.1, 0.4)
+        postproc["repulse_gain"] = trial.suggest_float("repulse_gain", 0.0, 0.12)
+        postproc["iterations"] = trial.suggest_int("iterations", 0, 5)
+        postproc["max_step"] = trial.suggest_float("max_step", 0.01, 0.06)
+        postproc["min_clearance"] = trial.suggest_float("min_clearance", 0.10, 0.30)
+        pathgen["obstacle_radius"] = trial.suggest_float("obstacle_radius", 0.12, 0.28)
+        pathgen["safety_margin"] = trial.suggest_float("safety_margin", 0.0, 0.10)
+        timing["v_max"] = trial.suggest_float("v_max", 1.5, 5.0)
+        timing["a_max"] = trial.suggest_float("a_max", 2.0, 6.0)
+        timing["a_lat_max"] = trial.suggest_float("a_lat_max", 1.5, 5.0)
+        timing["clearance_ref"] = trial.suggest_float("clearance_ref", 0.15, 0.5)
+        timing["clearance_floor_speed"] = trial.suggest_float("clearance_floor_speed", 0.5, 2.0)
+        timing["reversal_speed"] = trial.suggest_float("reversal_speed", 0.3, 1.0)
+        return pathgen, postproc, timing
+
+    def objective(trial):
+        pathgen, postproc, timing = _params(trial)
+        score, meta, _ = _eval_pipeline(env, cfg, train, pathgen, postproc, timing)
+        trial.set_user_attr("meta", meta)
+        return score
+
+    study = optuna.create_study(
+        direction="maximize", sampler=optuna.samplers.TPESampler(seed=0)
+    )
+    # Anchor on the committed defaults so TPE starts from the known-good point.
+    study.enqueue_trial(
+        {
+            "resample_step": DEFAULT_POSTPROC["resample_step"],
+            "repulse_gain": DEFAULT_POSTPROC["repulse_gain"],
+            "iterations": DEFAULT_POSTPROC["iterations"],
+            "max_step": DEFAULT_POSTPROC["max_step"],
+            "min_clearance": DEFAULT_POSTPROC["min_clearance"],
+            "obstacle_radius": DEFAULT_PATHGEN["obstacle_radius"],
+            "safety_margin": DEFAULT_PATHGEN["safety_margin"],
+            "v_max": DEFAULT_TIMING["v_max"],
+            "a_max": DEFAULT_TIMING["a_max"],
+            "a_lat_max": DEFAULT_TIMING["a_lat_max"],
+            "clearance_ref": DEFAULT_TIMING["clearance_ref"],
+            "clearance_floor_speed": DEFAULT_TIMING["clearance_floor_speed"],
+            "reversal_speed": DEFAULT_TIMING["reversal_speed"],
+        }
+    )
+    t0 = _time.perf_counter()
+    best_so_far = [-1e9]
+
+    def _cb(study, trial):
+        s = trial.value if trial.value is not None else -1e9
+        if s > best_so_far[0]:
+            best_so_far[0] = s
+            print(f"[trial {trial.number:>3}] NEW BEST score={s:+.4f}  "
+                  f"{trial.user_attrs.get('meta')}  params={trial.params}")
+
+    study.optimize(objective, n_trials=n_trials, callbacks=[_cb])
+    elapsed = _time.perf_counter() - t0
+
+    bp = study.best_params
+    pathgen = dict(DEFAULT_PATHGEN)
+    postproc = dict(DEFAULT_POSTPROC)
+    timing = dict(DEFAULT_TIMING)
+    for k in ("resample_step", "repulse_gain", "iterations", "max_step", "min_clearance"):
+        postproc[k] = bp[k]
+    pathgen["obstacle_radius"] = bp["obstacle_radius"]
+    pathgen["safety_margin"] = bp["safety_margin"]
+    for k in ("v_max", "a_max", "a_lat_max", "clearance_ref",
+              "clearance_floor_speed", "reversal_speed"):
+        timing[k] = bp[k]
+
+    print(f"\n=== Best on TRAIN (score {study.best_value:+.4f}) after {n_trials} "
+          f"trials in {elapsed:.0f}s ===\n  {study.best_trial.user_attrs['meta']}\n  {bp}")
+
+    # Validate the winner + the current default on held-out seeds.
+    tr_s, tr_m, _ = _eval_pipeline(env, cfg, train, pathgen, postproc, timing)
+    va_s, va_m, _ = _eval_pipeline(env, cfg, val, pathgen, postproc, timing)
+    db_s, db_m, _ = _eval_pipeline(env, cfg, val, DEFAULT_PATHGEN, DEFAULT_POSTPROC, DEFAULT_TIMING)
+    env.close()
+
+    print("\n=== Generalization check (lap-time objective) ===")
+    print(f"  tuned  TRAIN : {tr_m}")
+    print(f"  tuned  VAL   : {va_m}")
+    print(f"  default VAL  : {db_m}  (baseline to beat on held-out)")
+    if va_m["feasible"] and not tr_m["feasible"]:
+        print("  NOTE: feasible on VAL but not TRAIN -- suspicious, re-check.")
+    if tr_m["feasible"] and not va_m["feasible"]:
+        print("  WARNING: sits on the success floor -- feasible on TRAIN, fails it on VAL.")
+
+    result = {
+        "config": config, "n_trials": n_trials, "min_success": MIN_SUCCESS,
+        "best_params": bp, "pathgen": pathgen, "postproc": postproc, "timing": timing,
+        "train": tr_m, "val": va_m, "default_val": db_m,
+        "train_seeds": train, "val_seeds": val,
+    }
+    out_path = REPO_ROOT / out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.with_suffix(".json").write_text(json.dumps(result, indent=2))
+    print(f"\nSaved {out_path.with_suffix('.json')}")
+    return result
+
+
 def DEFAULT_HP():
     return {"N": DEFAULT_N, "q_diag": DEFAULT_Q, "r_diag": DEFAULT_R}
 
@@ -445,7 +713,9 @@ if __name__ == "__main__":
         {
             "sweep_n": sweep_n,
             "sweep_timing": sweep_timing,
+            "sweep_postproc": sweep_postproc,
             "tune": tune,
+            "tune_path": tune_path,
             "score_one": score_one,
         }
     )

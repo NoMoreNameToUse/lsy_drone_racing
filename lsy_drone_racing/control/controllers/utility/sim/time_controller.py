@@ -28,6 +28,7 @@ import os
 os.environ.setdefault("SCIPY_ARRAY_API", "1")
 os.environ.setdefault("MUJOCO_GL", "egl")
 
+import sys  # noqa: E402
 import time as _time  # noqa: E402
 
 import fire  # noqa: E402
@@ -43,10 +44,16 @@ def _quiet(verbose: bool):
     return contextlib.nullcontext() if verbose else contextlib.redirect_stdout(io.StringIO())
 
 
-def _time_seed(env, controller_cls, cfg, seed: int, verbose: bool) -> np.ndarray:
-    """Run one seeded episode, return per-step ``compute_control`` latency (ms)."""
+def _time_seed(env, controller_cls, cfg, seed, verbose, live=True, live_out=None) -> np.ndarray:
+    """Run one seeded episode, return per-step ``compute_control`` latency (ms).
+
+    When ``live`` is set, prints the average latency over each simulated second
+    (a window of ``config.env.freq`` steps) to ``live_out`` -- the real stdout,
+    captured before the controller-silencing redirect below.
+    """
     obs, info = env.reset(seed=seed)
     cfg.env.seed = seed
+    steps_per_sec = max(1, int(round(float(cfg.env.freq))))
     with _quiet(verbose):
         controller = controller_cls(obs, info, cfg)
 
@@ -56,6 +63,20 @@ def _time_seed(env, controller_cls, cfg, seed: int, verbose: bool) -> np.ndarray
             t0 = _time.perf_counter()
             action = controller.compute_control(obs, info)
             latencies.append((_time.perf_counter() - t0) * 1000.0)
+
+            # Once per simulated second, print the average over that second.
+            if live and len(latencies) % steps_per_sec == 0:
+                window = latencies[-steps_per_sec:]
+                avg = sum(window) / len(window)
+                worst = max(window)
+                sec = len(latencies) // steps_per_sec
+                print(
+                    f"[seed {seed} | sim {sec:>3d}s] avg {avg:6.2f} ms "
+                    f"({1000.0 / avg:6.1f} Hz)  max {worst:6.2f} ms  "
+                    f"over last {steps_per_sec} steps",
+                    file=live_out,
+                    flush=True,
+                )
 
             obs, reward, terminated, truncated, info = env.step(action)
             finished = controller.step_callback(action, obs, reward, terminated, truncated, info)
@@ -72,6 +93,7 @@ def time_controller(
     seeds: list[int] | None = None,
     seed: int = 2,
     spike_factor: float = 2.0,
+    live: bool = True,
     verbose: bool = False,
 ) -> dict:
     """Time ``compute_control`` and report latency vs the control-rate budget.
@@ -84,6 +106,8 @@ def time_controller(
         seed: Single seed used when ``seeds`` is None.
         spike_factor: Steps slower than ``spike_factor x`` the median are treated
             as spikes (replans) and split out of the steady-state stats.
+        live: If True (default), print the average latency once per simulated
+            second (a window of ``config.env.freq`` steps) as the run proceeds.
         verbose: Let the controller print during the run.
 
     Returns:
@@ -111,9 +135,10 @@ def time_controller(
         )
     )
 
+    live_out = sys.stdout  # captured before the controller-silencing redirect
     per_seed = []
     for s in seeds:
-        lat = _time_seed(env, controller_cls, cfg, s, verbose)
+        lat = _time_seed(env, controller_cls, cfg, s, verbose, live=live, live_out=live_out)
         if len(lat):
             per_seed.append(lat)
     env.close()

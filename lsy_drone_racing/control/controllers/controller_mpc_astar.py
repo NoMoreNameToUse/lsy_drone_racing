@@ -1,24 +1,25 @@
-"""
+"""The Caveman Approach for an exploratory controller.
 
-The Cavemen Approach for a exploratory controller 
+The controller is designed to be modular, with separate, quickly swappable
+components for path generation, timing, and trajectory generation.
 
-The controller is designed to be modular, with separate components for path generation, timing, and trajectory generation and quick swappable 
+Current architecture for the entry challenge:
 
-Current architecture for the entry challenge  
+- Simple three-point entry/center/exit waypoint selection with simple collision
+  avoidance for the gates
+- Between gates, a brute-force A* path generator using a 3D occupancy grid with
+  point snapping and waypoint pruning
+- Very simple distance-based timing
+- Still using the baseline MPC that is given as an example
 
-- Simple three point entry center exit waypoint selection with simple collision avoidance for the gates
-- Between gates A* Brute Force Oooga Booga path generator using a 3D Occupancy grid and point snapping and waypoint pruning
-- Very simple distance based timing
-- And still using baseline MPC that is given as example
+A lot of future improvement is possible, but I was low on time and this should be
+enough for the entry test.
 
-A lot of future improvement possible, but I was low on time and this should be enough for the entry test
-
-Idea collection: 
-- Weighted and dynamic aware A*
+Idea collection:
+- Weighted and dynamics-aware A*
 - Better timing and trajectory generation
 - Better modularity
-- RL based optimizatio
-8706754
+- RL-based optimization
 """
 
 from __future__ import annotations  # Python 3.10 type hints
@@ -95,25 +96,59 @@ MPC_HYPERPARAMS = {
     "r_diag": (1.0, 1.0, 1.0, 110.85),
 }
 
-# Tunable trajectory-timing hyperparameters (DynamicTiming). Same override pattern
-# as MPC_HYPERPARAMS so the harness can tune the reference speed profile per trial.
-# a_lat_max is the corner-speed cap (v_corner = sqrt(a_lat_max / curvature)).
+# Tunable trajectory-timing hyperparameters (DynamicTiming).
 #
-# a_lat_max was left at 4.0 when v_max/a_max were bumped to the fast (v4) regime,
-# which over-drove the corners (the gate-frame-clip failure). A 50-seed sensitivity
-# sweep (MPC weights fixed) found a 40/50 reliability plateau for a_lat_max in
-# 2.0-3.0 that falls off a cliff by 3.5; 4.0 sat past the cliff at 36/50. Set to
-# 2.5 (plateau, best score): 36->40/50 pass, RMSE 0.186->0.153, still faster than
-# the v3 config. Alternatives: 2.0 (lowest RMSE / max margin), 3.0 (fastest on the
-# plateau, but at the cliff edge).
+# Optuna lap-time result (tune_path, 200 trials): fastest median lap subject to
+# success >= 65%. Full-set 39/50 (78%), median 7.44 s vs the prior 8.5 s (~12%
+# faster). Notably v_max dropped 4.0 -> 2.83 (the tracker never realised v=4;
+# see tracker-speed-ceiling) while a_lat_max rose 2.5 -> 4.85 -- carry speed
+# through corners rather than on the straights. Prior values were v_max=4.0,
+# a_max=3.5, a_lat_max=2.5, clearance_ref=0.3, clearance_floor_speed=1.0,
+# reversal_speed=0.6.
 TIMING_HYPERPARAMS = {
-    "v_max": 4.0,
-    "a_max": 3.5,
-    "a_lat_max": 2.5,
-    "clearance_ref": 0.3,
-    "clearance_floor_speed": 1.0,
-    "reversal_speed": 0.6,
+    "v_max": 3.3,
+    "a_max": 3.6,
+    "a_lat_max": 4.85,
+    "clearance_ref": 0.495,
+    "clearance_floor_speed": 1.606,
+    "reversal_speed": 0.833,
     "min_segment_time": 0.01,
+}
+
+# Fixed pipeline settings. NOT tunable, pinned in the constructor:
+#  * grid_resolution: finer would raise replanning time past the control budget,
+#    and coarser loses threading accuracy;
+#  * prune_path: always on (shortcuts the A* staircase within each free segment).
+GRID_RESOLUTION = 0.05
+PRUNE_PATH = True
+
+# Tunable path-generator geometry (A* collision inflation). Bigger radii thread
+# more conservatively (safer, but longer detours + higher curvature that the
+# timing module caps speed on). Optuna lap-time result (tune_path); threads
+# tighter than the prior safety_margin=0.05, obstacle_radius=0.18.
+PATHGEN_HYPERPARAMS = {
+    "safety_margin": 0.013,
+    "obstacle_radius": 0.140,
+}
+
+# Tunable post-processor surface (PathPostProcessor). Speed levers: the densify
+# step (``resample_step``) and the soft pole nudge (``repulse_gain``,
+# ``iterations``, ``max_step``, ``influence``) lower curvature/raise clearance so
+# the timing profile can open up. Reliability lever: the hard clearance floor
+# (``min_clearance``, ``pole_radius``). Laplacian smoothing (``smooth_*``) is left
+# off (it raised crash rate). Values match PathPostProcessor's own defaults.
+POSTPROC_HYPERPARAMS = {
+    "enabled": True,
+    "resample_step": 0.2,
+    "smooth_iterations": 0,
+    "smooth_weight": 0.4,
+    "smooth_max_step": 0.03,
+    "repulse_gain": 0.03,
+    "iterations": 3,
+    "max_step": 0.02,
+    "influence": 0.6,
+    "min_clearance": 0.18,
+    "pole_radius": 0.15,
 }
 
 
@@ -184,12 +219,12 @@ def create_ocp_solver(
     # Set initial references. We will overwrite these later to track the trajectory
     ocp.cost.yref, ocp.cost.yref_e = np.zeros((ny,)), np.zeros((ny_e,))
 
-    # Set State Constraints (rpy < 30°)
+    # Set State Constraints (rpy < ~30°)
     ocp.constraints.lbx = np.array([-0.5, -0.5, -0.5])
     ocp.constraints.ubx = np.array([0.5, 0.5, 0.5])
     ocp.constraints.idxbx = np.array([3, 4, 5])
 
-    # Set Input Constraints (rpy < 30°)
+    # Set Input Constraints (rpy < ~30°, plus collective thrust bounds)
     ocp.constraints.lbu = np.array([-0.5, -0.5, -0.5, parameters["thrust_min"] * 4])
     ocp.constraints.ubu = np.array([0.5, 0.5, 0.5, parameters["thrust_max"] * 4])
     ocp.constraints.idxbu = np.array([0, 1, 2, 3])
@@ -225,7 +260,7 @@ def create_ocp_solver(
 
 
 class AttitudeMPC(Controller):
-    """Example of a MPC using the collective thrust and attitude interface."""
+    """Example of an MPC using the collective thrust and attitude interface."""
 
     def __init__(self, obs: dict[str, NDArray[np.floating]], info: dict, config: dict):
         """Initialize the attitude controller.
@@ -240,18 +275,17 @@ class AttitudeMPC(Controller):
 
         # modules -- same planning pipeline as controller_rl_astar (only the
         # downstream tracker differs: acados MPC here vs the RL agent there).
+        # All three module surfaces are module-level dicts so the tuning harness
+        # (utility/sim/tune_mpc.py) can override them per trial.
         self.path_gen = AStarImprovedPathGenerator(
-            grid_resolution=0.05,
-            safety_margin=0.05,
-            obstacle_radius=0.18,
-            prune_path=True,
+            grid_resolution=GRID_RESOLUTION, prune_path=PRUNE_PATH, **PATHGEN_HYPERPARAMS
         )
 
         # Dynamics-aware timing (curvature/clearance/reversal-shaped, accel-limited).
         self.timing = DynamicTiming(**TIMING_HYPERPARAMS)
 
         # Densify + per-point clearance tube provider for the timing module.
-        self.post_proc = PathPostProcessor(enabled=True)
+        self.post_proc = PathPostProcessor(**POSTPROC_HYPERPARAMS)
 
         # generate once
         waypoints = self.path_gen.generate(obs, config)
@@ -428,7 +462,7 @@ class AttitudeMPC(Controller):
         print(f"Replanned trajectory #{self._replan_count}. target_gate: ", {self._last_target_gate})
 
     def _should_replan(self, obs):
-        """Event-triggered replanning for level 2."""
+        """Event-triggered replanning (gate passed, or gate/obstacle pose moved)."""
         current_target_gate = int(np.asarray(obs["target_gate"]).item())
 
         # Avoid replanning every tick.
@@ -491,7 +525,7 @@ class AttitudeMPC(Controller):
         return self._finished
 
     def episode_callback(self):
-        """Reset the integral error."""
+        """Reset the tick counter at the end of an episode."""
         self._tick = 0
 
     def render_callback(self, sim: Sim):

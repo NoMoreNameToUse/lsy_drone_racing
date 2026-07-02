@@ -1,71 +1,71 @@
 ==============================================================================
 SEED EVALUATION REPORT
-config=level3.toml  seeds=50  generated=2026-07-01T22:45:52
+config=level3.toml  seeds=50  generated=2026-07-02T02:06:56
 ==============================================================================
-Total passed     : 32 / 50  (64.0%)
-Median speed     : 1.214 m/s (passed runs)   | all runs: 1.181 m/s
-Median finish    : 9.42 s (passed runs)
-Fastest / slowest finish: 6.46 s / 11.34 s
+Total passed     : 33 / 50  (66.0%)
+Median speed     : 1.351 m/s (passed runs)   | all runs: 1.361 m/s
+Median finish    : 7.4 s (passed runs)
+Fastest / slowest finish: 5.20 s / 9.24 s
 
-Not-passed gate histogram (gate -> #fails): {0: 1, 1: 4, 2: 4, 3: 9}
-Failure categories: {'collision': 17, 'timeout': 1}
+Not-passed gate histogram (gate -> #fails): {0: 7, 1: 4, 2: 3, 3: 3}
+Failure categories: {'collision': 17}
 
 ------------------------------------------------------------------------------
 FAILED RUNS
 ------------------------------------------------------------------------------
-seed   191876941  gate 0/4  t= 2.24s  vmax=1.99  reason: collision near gate 0 (d=0.21 m) while targeting gate 0
-seed           8  gate 1/4  t= 2.16s  vmax=1.73  reason: collision near gate 0 (d=0.16 m) while targeting gate 1
-seed   537525082  gate 1/4  t= 4.66s  vmax=2.32  reason: collision near gate 0 (d=0.15 m) while targeting gate 1
-seed  1674664546  gate 1/4  t= 3.42s  vmax=1.96  reason: collision near gate 1 (d=0.25 m) while targeting gate 1
-seed  2070717517  gate 1/4  t= 4.88s  vmax=1.94  reason: collision near gate 1 (d=0.24 m) while targeting gate 1
-seed           5  gate 2/4  t= 5.86s  vmax=1.87  reason: collision near gate 2 (d=0.22 m) while targeting gate 2
-seed          12  gate 2/4  t= 7.22s  vmax=1.81  reason: collision near gate 2 (d=0.14 m) while targeting gate 2
-seed    72996710  gate 2/4  t=30.00s  vmax=2.69  reason: timeout: still targeting gate 2 after the time limit
-seed   168155228  gate 2/4  t= 6.44s  vmax=1.68  reason: collision near obstacle 2 (d=0.12 m) while targeting gate 2
-seed           4  gate 3/4  t=12.18s  vmax=2.42  reason: collision near gate 3 (d=0.23 m) while targeting gate 3
-seed           7  gate 3/4  t=10.88s  vmax=1.89  reason: collision near gate 3 (d=0.25 m) while targeting gate 3
-seed          14  gate 3/4  t=10.48s  vmax=2.23  reason: collision near gate 2 (d=0.14 m) while targeting gate 3
-seed          15  gate 3/4  t= 9.04s  vmax=1.90  reason: collision near gate 2 (d=0.14 m) while targeting gate 3
-seed   196241771  gate 3/4  t= 9.12s  vmax=2.12  reason: collision near gate 3 (d=0.18 m) while targeting gate 3
-seed   502743744  gate 3/4  t= 9.04s  vmax=2.00  reason: collision near gate 3 (d=0.24 m) while targeting gate 3
-seed   548046238  gate 3/4  t= 8.16s  vmax=2.16  reason: collision near gate 0 (d=0.33 m) while targeting gate 3
-seed   780252868  gate 3/4  t= 9.84s  vmax=2.34  reason: collision near gate 3 (d=0.12 m) while targeting gate 3
-seed   826175110  gate 3/4  t= 6.46s  vmax=1.81  reason: collision near gate 2 (d=0.24 m) while targeting gate 3
+seed          12  gate 0/4  t= 1.36s  vmax=2.48  reason: collision near gate 0 (d=0.22 m) while targeting gate 0
+seed          13  gate 0/4  t= 1.86s  vmax=2.22  reason: collision near gate 0 (d=0.15 m) while targeting gate 0
+seed   437125220  gate 0/4  t= 0.94s  vmax=2.36  reason: collision near gate 0 (d=0.17 m) while targeting gate 0
+seed   780252868  gate 0/4  t= 1.08s  vmax=2.66  reason: collision near gate 0 (d=0.22 m) while targeting gate 0
+seed  1008680058  gate 0/4  t= 4.86s  vmax=2.72  reason: collision near gate 0 (d=0.26 m) while targeting gate 0
+seed  1345132680  gate 0/4  t= 0.96s  vmax=2.56  reason: collision near gate 0 (d=0.26 m) while targeting gate 0
+seed  1749845046  gate 0/4  t= 0.98s  vmax=2.43  reason: collision near gate 0 (d=0.36 m) while targeting gate 0
+seed           4  gate 1/4  t= 2.54s  vmax=2.29  reason: collision near gate 0 (d=0.09 m) while targeting gate 1
+seed   196241771  gate 1/4  t= 1.24s  vmax=2.52  reason: collision near gate 0 (d=0.11 m) while targeting gate 1
+seed   334327978  gate 1/4  t= 2.46s  vmax=3.13  reason: collision near gate 1 (d=0.15 m) while targeting gate 1
+seed   601977100  gate 1/4  t= 2.34s  vmax=2.64  reason: collision near obstacle 1 (d=0.13 m) while targeting gate 1
+seed           3  gate 2/4  t= 5.14s  vmax=2.57  reason: collision near gate 2 (d=0.11 m) while targeting gate 2
+seed          10  gate 2/4  t= 5.50s  vmax=2.53  reason: collision near obstacle 2 (d=0.09 m) while targeting gate 2
+seed  1015453627  gate 2/4  t= 2.50s  vmax=2.35  reason: collision near gate 1 (d=0.11 m) while targeting gate 2
+seed          14  gate 3/4  t= 5.66s  vmax=3.07  reason: collision near gate 2 (d=0.12 m) while targeting gate 3
+seed   826175110  gate 3/4  t= 8.06s  vmax=2.76  reason: collision near gate 3 (d=0.18 m) while targeting gate 3
+seed  1943230833  gate 3/4  t= 6.10s  vmax=3.08  reason: collision near gate 1 (d=0.54 m) while targeting gate 3
 
 ------------------------------------------------------------------------------
 PASSED RUNS (seed: time s @ avg m/s, vmax)
 ------------------------------------------------------------------------------
-seed   848575542  t= 6.46s  avg=1.31 m/s  vmax=2.21
-seed   601977100  t= 7.72s  avg=1.15 m/s  vmax=1.94
-seed           9  t= 7.96s  avg=1.18 m/s  vmax=1.93
-seed  1943230833  t= 8.48s  avg=1.19 m/s  vmax=2.21
-seed           0  t= 8.56s  avg=1.22 m/s  vmax=1.98
-seed  1015453627  t= 8.64s  avg=1.18 m/s  vmax=2.22
-seed  1749845046  t= 8.72s  avg=1.21 m/s  vmax=2.24
-seed   368113776  t= 9.04s  avg=1.28 m/s  vmax=2.13
-seed           2  t= 9.06s  avg=1.22 m/s  vmax=2.18
-seed   334327978  t= 9.10s  avg=1.24 m/s  vmax=2.29
-seed  1345132680  t= 9.14s  avg=1.10 m/s  vmax=1.83
-seed          11  t= 9.24s  avg=1.17 m/s  vmax=2.28
-seed   673638594  t= 9.28s  avg=1.15 m/s  vmax=1.86
-seed   992857546  t= 9.32s  avg=1.22 m/s  vmax=2.02
-seed           6  t= 9.34s  avg=1.18 m/s  vmax=1.80
-seed          13  t= 9.38s  avg=1.17 m/s  vmax=1.92
-seed  1008680058  t= 9.46s  avg=1.14 m/s  vmax=2.09
-seed           3  t= 9.48s  avg=1.18 m/s  vmax=1.82
-seed  1609583425  t= 9.58s  avg=1.25 m/s  vmax=2.30
-seed   223246164  t= 9.60s  avg=1.18 m/s  vmax=2.24
-seed          10  t= 9.62s  avg=1.12 m/s  vmax=1.97
-seed   350327268  t= 9.76s  avg=1.24 m/s  vmax=2.23
-seed   394335597  t= 9.88s  avg=1.14 m/s  vmax=1.84
-seed   447542283  t=10.12s  avg=1.22 m/s  vmax=2.20
-seed  1522539070  t=10.20s  avg=1.27 m/s  vmax=2.24
-seed  1898163101  t=10.22s  avg=1.26 m/s  vmax=2.38
-seed  1243516087  t=10.36s  avg=1.25 m/s  vmax=2.19
-seed  1450051549  t=10.44s  avg=1.19 m/s  vmax=2.20
-seed           1  t=10.50s  avg=1.26 m/s  vmax=2.29
-seed   437125220  t=10.58s  avg=1.23 m/s  vmax=2.16
-seed   380878779  t=10.86s  avg=1.23 m/s  vmax=2.25
-seed  1756798599  t=11.34s  avg=1.30 m/s  vmax=2.33
+seed   848575542  t= 5.20s  avg=1.50 m/s  vmax=2.94
+seed           5  t= 6.20s  avg=1.47 m/s  vmax=2.74
+seed           9  t= 6.48s  avg=1.27 m/s  vmax=2.72
+seed   673638594  t= 6.78s  avg=1.30 m/s  vmax=2.63
+seed   168155228  t= 6.82s  avg=1.44 m/s  vmax=3.29
+seed   191876941  t= 6.86s  avg=1.22 m/s  vmax=2.50
+seed           0  t= 6.88s  avg=1.35 m/s  vmax=2.99
+seed  2070717517  t= 7.10s  avg=1.31 m/s  vmax=3.12
+seed  1674664546  t= 7.10s  avg=1.29 m/s  vmax=2.12
+seed   537525082  t= 7.14s  avg=1.41 m/s  vmax=3.04
+seed           6  t= 7.18s  avg=1.34 m/s  vmax=2.62
+seed  1609583425  t= 7.18s  avg=1.48 m/s  vmax=3.13
+seed   368113776  t= 7.24s  avg=1.48 m/s  vmax=3.04
+seed   502743744  t= 7.32s  avg=1.28 m/s  vmax=2.67
+seed           2  t= 7.40s  avg=1.33 m/s  vmax=2.83
+seed   548046238  t= 7.40s  avg=1.25 m/s  vmax=2.80
+seed    72996710  t= 7.40s  avg=1.55 m/s  vmax=3.43
+seed   350327268  t= 7.46s  avg=1.48 m/s  vmax=2.90
+seed   223246164  t= 7.56s  avg=1.30 m/s  vmax=2.28
+seed           8  t= 7.64s  avg=1.50 m/s  vmax=3.49
+seed           1  t= 7.66s  avg=1.59 m/s  vmax=3.23
+seed          11  t= 7.66s  avg=1.24 m/s  vmax=2.60
+seed   394335597  t= 7.70s  avg=1.29 m/s  vmax=2.90
+seed           7  t= 7.76s  avg=1.41 m/s  vmax=2.90
+seed   992857546  t= 7.82s  avg=1.33 m/s  vmax=2.53
+seed  1898163101  t= 7.86s  avg=1.50 m/s  vmax=3.19
+seed   380878779  t= 7.96s  avg=1.47 m/s  vmax=3.07
+seed   447542283  t= 8.00s  avg=1.33 m/s  vmax=2.66
+seed  1450051549  t= 8.10s  avg=1.37 m/s  vmax=3.11
+seed  1243516087  t= 8.70s  avg=1.35 m/s  vmax=2.70
+seed          15  t= 8.72s  avg=1.55 m/s  vmax=3.14
+seed  1522539070  t= 8.74s  avg=1.33 m/s  vmax=2.53
+seed  1756798599  t= 9.24s  avg=1.45 m/s  vmax=2.74
 ==============================================================================
-Wall-clock eval time: 175.8 s for 50 seeds
+Wall-clock eval time: 102.9 s for 50 seeds
