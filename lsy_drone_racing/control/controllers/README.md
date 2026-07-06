@@ -92,24 +92,31 @@ The MPC row is the aggressive tuning we actually flew; the same pipeline retunes
 
 ## Running
 
-> **Dependencies.** The A* planners are JIT-compiled with `numba`, and the RL
-> controller/training need the reinforcement-learning stack (`torch` etc.). These
-> are not always pulled in by the base install — if you hit an `ImportError`,
-> install them first (e.g. `pip install numba`, and use the `rl` pixi environment
-> `pixi run -e rl ...` for the RL controller and `train_rl_track.py`).
+1. Follow the [official setup guide](https://lsy-drone-racing.readthedocs.io/en/latest/getting_started/setup.html)
+   to install `pixi` and the base environment.
+2. Install `numba`, needed by the A* path planners but not pulled in by the base install:
+   ```bash
+   pixi run pip install numba
+   ```
+3. For the RL controller (`controller_rl_astar.py`) or `train_rl_track.py`, use the `tests`
+   environment — it bundles the `rl` feature (`torch`) that the base/`default` environment
+   lacks:
+   ```bash
+   pixi run -e tests python scripts/sim.py --config level3.toml --controller controllers/controller_rl_astar.py
+   ```
+4. Select a controller in the toml in /config and run it
+    ```bash
+    # Single visual run on a level
+    python scripts/sim.py --config level3.toml
 
-```bash
-# Single visual run on a level
-python scripts/sim.py --config level3.toml
+    # Batch evaluation over 100 random level 3 seeds 
+    python lsy_drone_racing/control/controllers/utility/sim/evaluate_seeds_gui.py --config level3.toml --n_seeds 100 --rng_seed 1 --render False
 
-# Batch evaluation over 100 random level 3 seeds 
-python lsy_drone_racing/control/controllers/utility/sim/evaluate_seeds_gui.py --config level3.toml --n_seeds 100 --rng_seed 1 --render False
+    # Batch evaluation over 100 final track with randomized dynamics / obstacle locations
 
-# Batch evaluation over 100 final track with randomized dynamics / obstacle locations
+    python lsy_drone_racing/control/controllers/utility/sim/evaluate_seeds_gui.py --config final.toml --n_seeds 100 --rng_seed 1 --render False
 
-python lsy_drone_racing/control/controllers/utility/sim/evaluate_seeds_gui.py --config final.toml --n_seeds 100 --rng_seed 1 --render False
-
-```
+    ```
 
 ## Directory layout
 
