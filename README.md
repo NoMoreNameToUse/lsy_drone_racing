@@ -26,6 +26,19 @@
 
 ---
 
+> ## Our group's work
+>
+> This repository is a fork of the course template. Our group specific
+> implementation: the four racing controllers (MPC, RL, MPPI, MPCC), the shared
+> planning pipeline, and their results — lives under
+> [`lsy_drone_racing/control/controllers/`](lsy_drone_racing/control/controllers/).
+> **Start with its [README](lsy_drone_racing/control/controllers/README.md)** for
+> the detailed write-up on how everything works and how to run it.
+>
+> The rest of this file is the original course template documentation.
+
+---
+
 ## Introduction
 
 **LSY Autonomous Drone Racing** is a course project designed to help you develop and evaluate autonomous drone racing algorithms — both in simulation and on real Crazyflie hardware.  
