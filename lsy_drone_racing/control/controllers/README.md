@@ -99,6 +99,8 @@ The MPC row is the aggressive tuning we actually flew; the same pipeline retunes
    pixi run pip install numba
    pixi add numba
    ```
+   This is due to the currently rapid changing main fork that could cause things to break.
+   Can be added into pyproject.toml or pixi.lock if later stable. 
 3. For the RL controller (`controller_rl_astar.py`) or `train_rl_track.py`, use the `tests`
    environment — it bundles the `rl` feature (`torch`) that the base/`default` environment
    lacks:
