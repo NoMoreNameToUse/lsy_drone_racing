@@ -97,6 +97,7 @@ The MPC row is the aggressive tuning we actually flew; the same pipeline retunes
 2. Install `numba`, needed by the A* path planners but not pulled in by the base install:
    ```bash
    pixi run pip install numba
+   pixi add numba
    ```
 3. For the RL controller (`controller_rl_astar.py`) or `train_rl_track.py`, use the `tests`
    environment — it bundles the `rl` feature (`torch`) that the base/`default` environment
