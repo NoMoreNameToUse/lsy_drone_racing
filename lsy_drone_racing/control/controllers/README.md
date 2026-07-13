@@ -94,13 +94,13 @@ The MPC row is the aggressive tuning we actually flew; the same pipeline retunes
 
 1. Follow the [official setup guide](https://lsy-drone-racing.readthedocs.io/en/latest/getting_started/setup.html)
    to install `pixi` and the base environment.
-2. Install `numba`, needed by the A* path planners but not pulled in by the base install:
+2. In case of `numba` missing, install it manually. For numpy JIT compilling. Should now be in pixi.lock and pyproject.toml.
    ```bash
    pixi run pip install numba
    pixi add numba
    ```
-   This is due to the currently rapid changing main fork that could cause things to break.
-   Can be added into pyproject.toml or pixi.lock if later stable. 
+   This is due to the currently rapid changing main fork that could cause things to break. Just in case.
+
 3. For the RL controller (`controller_rl_astar.py`) or `train_rl_track.py`, use the `tests`
    environment — it bundles the `rl` feature (`torch`) that the base/`default` environment
    lacks:
